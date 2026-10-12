@@ -25,8 +25,12 @@
 html,body{height:100%;background:var(--bg);color:var(--ink)}
 body{font-family:var(--sans);font-size:16px;line-height:1.5;-webkit-font-smoothing:antialiased}
 button{font:inherit;color:inherit}
-.app{min-height:100%;max-width:880px;margin:0 auto;padding-inline:16px;display:grid;grid-template-rows:auto minmax(430px,1fr) auto}
+.app{min-height:calc(100% - 52px);max-width:880px;margin:0 auto;padding-inline:16px;display:grid;grid-template-rows:auto minmax(430px,1fr) auto}
 
+.portfolio-header{height:52px;max-width:880px;margin:0 auto;padding-inline:16px;display:flex;align-items:center}
+.portfolio-header a{font-size:12px;color:var(--ink2);text-decoration-line:underline;text-decoration-style:dotted;text-underline-offset:4px;padding-block:10px}
+.portfolio-header a:hover{color:var(--ink)}
+.portfolio-header a:focus-visible{outline:2px solid var(--acc);outline-offset:4px;border-radius:2px}
 /* map */
 .map{display:flex;justify-content:center;gap:16px;padding-block:18px 4px}
 .grp{display:grid;gap:8px;justify-items:center}
@@ -447,6 +451,7 @@ svg.ico{width:18px;height:18px;fill:none;stroke:currentColor;stroke-width:1.8;st
 </style>
 </head>
 <body>
+<header class="portfolio-header"><a href="/#inside-a-transformer">Back to portfolio</a></header>
 
 
 <div class="app">

@@ -8,7 +8,7 @@ Personal portfolio, hosted with GitHub Pages from `main` at the repository root.
 - `_astro/*.css`: all styling, responsive layout, and theme colors.
 - `images/`, `fonts/`, `favicon.svg`, and `og.png`: public assets.
 - `404.html`: custom error page.
-- `education/transformers.html`: standalone Inside a Transformer walkthrough, linked at `/education/transformers`. Its original HTML, styling, and interactive JavaScript are preserved; it loads Geist fonts from Google Fonts.
+- `education/transformers.html`: standalone Inside a Transformer walkthrough, linked at `/education/transformers`. The walkthrough keeps its own styling and loads Geist fonts from Google Fonts. It includes a return link to the portfolio and maintained diagram/caption updates.
 
 This repository contains the complete static Astro export from the active server
 deployment, preserving its original green-and-orange design. The original Astro
@@ -16,6 +16,10 @@ component source was not present in the deployed folder. No build or dependency
 installation is needed; edit the HTML/CSS directly.
 Pushes to `main` trigger GitHub Pages publication. GitHub Pages hosts static files;
 any future server-side features will need a separate service.
+
+## Walkthrough verification
+
+Run `node tests/animation-regression.mjs` to check all 31 scenes, animation cleanup, navigation, and illustrative arithmetic. This deterministic harness uses stubbed geometry; check layout in a browser after visual changes.
 
 ## Domain migration
 

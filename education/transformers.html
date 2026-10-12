@@ -958,9 +958,12 @@ featureLesson('value','Value space holds information worth passing onward. For â
    function wire(d){svg.append(sv('path',{d:d,class:'ff-wire','marker-end':'url(#ff-arrow)'}));}
    function matrix(x,y,data,cls){var g=sv('g',{class:'ff-stage '+cls});data.forEach(function(row,k){row.forEach(function(v,d){g.append(sv('rect',{x:x+d*8,y:y+k*8,width:6,height:5,rx:1,fill:k===IT?'var(--acc)':'var(--ink2)',opacity:.2+.75*Math.tanh(Math.abs(v))}));});});svg.append(g);return g;}
    box(5,5,350,370);label(48,23,'layer 1');
-   box(110,35,140,34);label(180,56,'attention','ff-title');
-   wire('M180 69 V82 H61 V94');wire('M96 137 H146');wire('M61 180 V215');wire('M240 197 V210 H180 V215');
-   var inputs=matrix(30,97,AFTERATTN,'ff-input');label(61,193,'10 Ã— 8');
+   label(72.5,60,'token vectors');wire('M72.5 70 V103');
+   var attention=sv('g',{class:'ff-stage ff-attention'});
+   attention.append(sv('rect',{x:20,y:108,width:105,height:58,rx:9,class:'ff-border'}));
+   function attentionLabel(y,text,cls){var t=sv('text',{x:72.5,y:y,'text-anchor':'middle',class:cls||''});t.textContent=text;attention.append(t);}
+   attentionLabel(132,'attention','ff-title');attentionLabel(151,'output vectors');svg.append(attention);
+   wire('M125 137 H146');wire('M72.5 166 V207 H61 V215');wire('M240 197 V210 H180 V215');
    box(151,95,178,99);var net=ffNetwork();net.setAttribute('x',173);net.setAttribute('y',111);net.setAttribute('width',134);net.setAttribute('height',78);net.style.width='134px';net.style.height='78px';net.classList.add('p1','p2','p3');net.querySelectorAll('.ff-hidden').forEach(function(n,k){n.setAttribute('style','--a:'+Math.tanh(Math.abs(PROD[k])).toFixed(2));});svg.append(net);label(240,108,'feed-forward','ff-title');
    label(61,230,'preserved');label(180,230,'update');label(299,230,'to next layer');
    var preserved=matrix(30,240,AFTERATTN,'ff-preserved'),updates=matrix(149,240,FFUPDATES,'ff-updates'),result=matrix(268,240,L1OUT,'ff-result');
@@ -969,7 +972,7 @@ featureLesson('value','Value space holds information worth passing onward. For â
    wire('M299 347 V389 H180 V409');label(180,401,'same shape Â· updated values');
    box(95,409,170,38);label(180,432,'layer 2 Â· attention','ff-title');inner.append(svg);
    return {play:async function(c){
-     c.cls(inputs,'on');c.cls(preserved,'on');c.cls(net,'p1');c.cls(net,'p2');c.cls(net,'p3');
+     c.cls(attention,'on');c.cls(preserved,'on');c.cls(net,'p1');c.cls(net,'p2');c.cls(net,'p3');
      await c.wait(700);c.cls(updates,'on');await c.wait(1100);c.cls(result,'on');
    }};
  }},

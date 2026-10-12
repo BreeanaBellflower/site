@@ -8,6 +8,7 @@ Personal portfolio, hosted with GitHub Pages from `main` at the repository root.
 - `_astro/*.css`: all styling, responsive layout, and theme colors.
 - `images/`, `fonts/`, `favicon.svg`, and `og.png`: public assets.
 - `404.html`: custom error page.
+- `education/transformers.html`: standalone Inside a Transformer walkthrough, linked at `/education/transformers`. Its original HTML, styling, and interactive JavaScript are preserved; it loads Geist fonts from Google Fonts.
 
 This repository contains the complete static Astro export from the active server
 deployment, preserving its original green-and-orange design. The original Astro

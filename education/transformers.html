@@ -1,0 +1,1502 @@
+<!doctype html>
+<html lang="en" class="intro-dark">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<style>:root{color-scheme:light;padding-top:env(safe-area-inset-top,0px);padding-bottom:env(safe-area-inset-bottom,0px)}body{margin:0}[hidden]{display:none!important}</style>
+<title>Inside a Transformer</title>
+<meta name="description" content="An animated, step-by-step walkthrough of a tiny transformer and its KV cache.">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Geist:wght@400;500;600&family=Geist+Mono:wght@400;500&display=swap">
+<style>
+/* Layout: the network unrolled left to right. One station per screen; each step slides the camera one station right. Map on top, caption and controls at the bottom. */
+:root{
+  --bg:#ffffff; --ink:#0e1013; --ink2:#3a3f47; --muted:#80868f; --line:#e5e7eb; --faint:#f5f6f8; --acc:#2f5bea;
+  --sans:"Geist", ui-sans-serif, system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+  --mono:"Geist Mono", ui-monospace, "SF Mono", Menlo, Consolas, monospace;
+  --rh:26px;
+}
+@media (prefers-color-scheme: dark){
+  :root:not([data-theme="light"]){--bg:#0b0c0e;--ink:#eceef1;--ink2:#c3c8d0;--muted:#7d8591;--line:#262a30;--faint:#131518;--acc:#7c98ff;color-scheme:dark}
+}
+:root[data-theme="dark"],:root.intro-dark{--bg:#0b0c0e;--ink:#eceef1;--ink2:#c3c8d0;--muted:#7d8591;--line:#262a30;--faint:#131518;--acc:#7c98ff;color-scheme:dark}
+*{box-sizing:border-box}
+html,body{height:100%;background:var(--bg);color:var(--ink)}
+body{font-family:var(--sans);font-size:16px;line-height:1.5;-webkit-font-smoothing:antialiased}
+button{font:inherit;color:inherit}
+.app{min-height:100%;max-width:880px;margin:0 auto;padding-inline:16px;display:grid;grid-template-rows:auto minmax(430px,1fr) auto}
+
+/* map */
+.map{display:flex;justify-content:center;gap:16px;padding-block:18px 4px}
+.grp{display:grid;gap:8px;justify-items:center}
+.grp>span{font:500 10px/1 var(--mono);letter-spacing:.07em;text-transform:uppercase;color:var(--muted);transition:color .3s}
+.grp.on>span{color:var(--ink)}
+.dts{position:relative;display:flex;gap:12px}
+.dts::before{content:"";position:absolute;left:-10px;right:-10px;top:50%;height:1px;background:var(--line)}
+.grp:first-child .dts::before{left:4px}
+.grp:last-child .dts::before{right:4px}
+.map .d{position:relative;width:9px;height:9px;padding:0;border-radius:50%;border:1.5px solid var(--line);background:var(--bg);cursor:pointer;transition:background .3s,border-color .3s,transform .3s}
+.map .d::after{content:"";position:absolute;inset:-9px}
+.map .d.done{background:var(--ink2);border-color:var(--ink2)}
+.map .d.cur{background:var(--acc);border-color:var(--acc);transform:scale(1.4)}
+
+/* stations */
+.vp{position:relative;overflow:hidden}
+.station{position:absolute;inset:0;display:flex;align-items:center;justify-content:center}
+.station.slide{transition:transform .64s cubic-bezier(.65,0,.35,1)}
+.sin{position:relative;width:100%;max-width:560px}
+.instant,.instant *{transition:none!important}
+.instant *:not(.cursor){animation:none!important}
+
+/* dock */
+.dock{display:grid;gap:14px;padding-block:6px calc(18px + env(safe-area-inset-bottom,0px))}
+.cap{margin:0;font-size:16.5px;line-height:1.5;max-width:56ch;min-height:4.5em;letter-spacing:-.005em;transition:opacity .18s}
+.cap.fade{opacity:0}
+.ctl{display:flex;align-items:center;gap:6px}
+.ib{width:46px;height:46px;border-radius:50%;border:1px solid var(--line);background:var(--bg);display:grid;place-items:center;cursor:pointer}
+.ib:disabled{opacity:.35;cursor:default}
+.tb{font-size:14px;color:var(--muted);background:none;border:0;padding:10px;cursor:pointer}
+.nb{margin-left:auto;height:46px;padding:0 18px 0 22px;border:0;border-radius:999px;background:var(--ink);color:var(--bg);font-weight:500;font-size:15px;display:inline-flex;align-items:center;gap:8px;cursor:pointer}
+.ib:focus-visible,.nb:focus-visible,.tb:focus-visible,.d:focus-visible,.sb:focus-visible,input:focus-visible{outline:2px solid var(--acc);outline-offset:3px}
+svg.ico{width:18px;height:18px;fill:none;stroke:currentColor;stroke-width:1.8;stroke-linecap:round;stroke-linejoin:round}
+
+/* shared marks */
+.panel{position:relative;background:var(--faint);border-radius:18px;padding:34px 14px 16px}
+.plbl{position:absolute;top:12px;left:16px;font:500 10.5px/1 var(--mono);letter-spacing:.03em;color:var(--muted)}
+.lbl{font:500 10.5px/1.3 var(--mono);letter-spacing:.02em;color:var(--muted);white-space:nowrap}
+.wc{display:inline-flex;align-items:center;gap:9px;flex:none}
+.pn{font:500 10.5px/1 var(--mono);color:var(--muted);width:2ch;text-align:right;font-variant-numeric:tabular-nums}
+.tw{font-size:15px;width:6.2ch;white-space:nowrap}
+.wc.me .tw{color:var(--acc);font-weight:600}
+.vg{display:inline-flex;align-items:center;gap:2px;height:26px;flex:none;padding-inline:1px;background:linear-gradient(var(--line),var(--line)) 0 50%/100% 1px no-repeat}
+.vg i{display:block;width:5px;height:var(--h);border-radius:1px;background:var(--ink2);transform-origin:50% 100%;transform:translateY(calc(var(--h) / -2)) scaleY(var(--s,1));transition:transform .45s cubic-bezier(.3,.7,.2,1),background .45s;transition-delay:calc(var(--j,0) * 22ms)}
+.vg i.d{transform-origin:50% 0;transform:translateY(calc(var(--h) / 2)) scaleY(var(--s,1))}
+.vg.z i{--s:0}
+.vg.acc i{background:var(--acc)}
+.vg.dim i{background:var(--muted)}
+.ov{position:absolute;left:0;top:0;pointer-events:none;overflow:visible}
+.ln{fill:none;stroke:var(--muted);stroke-width:1;opacity:.55;stroke-dasharray:1;stroke-dashoffset:1;transition:stroke-dashoffset .55s ease-out,stroke-width .5s,opacity .5s,stroke .4s}
+.ln.on{stroke-dashoffset:0}
+.ln.acc{stroke:var(--acc);opacity:1;stroke-width:1.6}
+.ghost{position:absolute;margin:0;pointer-events:none;z-index:3;transform-origin:left top;white-space:nowrap}
+.item{display:grid;gap:5px;justify-items:start}
+.item small{font:500 10px/1 var(--mono);color:var(--muted);white-space:nowrap}
+.op{font:500 12px/1.2 var(--mono);color:var(--muted);white-space:nowrap}
+.pc{font:500 11px/1 var(--mono);color:var(--muted);width:5ch;text-align:right;font-variant-numeric:tabular-nums}
+
+.title-slide{display:grid;gap:18px;padding:24px;max-width:520px;margin:auto;opacity:0;transition:opacity .6s}
+.title-slide.on{opacity:1}.title-kicker{font:11px var(--mono);letter-spacing:.08em;color:var(--acc)}
+.title-slide h1{margin:0;font-size:clamp(40px,8vw,60px);font-weight:500;line-height:1.06;letter-spacing:-.045em;max-width:9ch}
+.title-slide p{margin:0;max-width:30ch;font-size:17px;line-height:1.5;color:var(--ink2)}
+
+/* 1 tokens */
+.t1{position:relative;height:330px}
+.pline{position:absolute;left:0;right:0;top:50%;transform:translateY(-50%);text-align:center;font:400 clamp(17px,4.6vw,21px)/1.55 var(--mono);transition:opacity .4s;text-wrap:balance}
+.pr{color:var(--acc);margin-right:.5em}
+.ch{display:none}
+.ch.v{display:inline}
+.cursor{display:inline-block;width:.55em;height:1.05em;background:var(--acc);vertical-align:-.16em;margin-left:.05em;animation:blink 1s steps(1) infinite}
+@keyframes blink{50%{opacity:0}}
+.stack{position:absolute;left:50%;top:50%;transform:translate(-50%,-50%);opacity:0;transition:opacity .35s}
+.t1.b .pline{opacity:0}
+.t1.b .stack{opacity:1}
+.trow{display:flex;align-items:center;gap:10px;height:var(--rh)}
+.trow.st .tw{color:var(--muted)}
+.trow.me .tw{color:var(--acc);font-weight:600}
+.trow.nx{opacity:0;transition:opacity .4s .5s}
+.trow.nx .tw{color:var(--acc);width:auto;border-bottom:1.5px dashed var(--acc);padding:0 10px;line-height:1.2}
+.t1.b .trow.nx{opacity:1}
+
+/* 2 embed */
+.t2{position:relative;display:grid;grid-template-columns:auto auto auto;grid-template-rows:auto auto;justify-content:center;align-items:center;column-gap:clamp(30px,8vw,60px);row-gap:12px}
+.t2>.lbl{text-align:center}
+.row{display:flex;align-items:center;height:var(--rh)}
+.tbl{display:grid;grid-template-columns:repeat(8,var(--tc,7px));gap:1px}
+.tbl i{width:var(--tc,7px);height:var(--tc,7px);border-radius:1.5px;background:color-mix(in oklab,var(--ink) calc(5% + var(--a) * 50%),var(--bg));transition:background .35s}
+.tbl i.hl{background:color-mix(in oklab,var(--acc) calc(35% + var(--a) * 65%),var(--bg))}
+.tbl i.fl{animation:flash .7s ease-out}
+@keyframes flash{30%{background:color-mix(in oklab,var(--acc) 55%,var(--bg))}}
+.t2.done .ln:not(.acc){opacity:.16}
+
+/* 2b space */
+.t2b{display:grid;grid-template-columns:auto minmax(0,1fr);gap:18px;align-items:center}
+.srcw{display:grid;gap:8px;justify-items:center}
+.srcw .lbl{color:var(--acc)}
+.plot{position:relative;height:270px;min-width:0}
+.sp{display:block;overflow:visible}
+.sp .ax{stroke:var(--line);stroke-width:1}
+.sp text{font-family:var(--sans);font-size:12.5px;fill:var(--ink)}
+.sp .axl,.sp .hl{font-family:var(--mono);font-size:10px;fill:var(--muted)}
+.sp circle{fill:var(--ink2)}
+.sp .f circle{fill:var(--muted)}
+.sp .f text{fill:var(--muted)}
+.sp .w circle{fill:var(--acc)}
+.sp .w text{fill:var(--acc);font-weight:600}
+.sp .pt{opacity:0;transition:opacity .4s;transition-delay:calc(var(--k) * 70ms)}
+.sp.p1 .pt.w{opacity:1;transition-delay:0s}
+.sp.p2 .pt{opacity:1}
+.sp .halo{fill:color-mix(in oklab,var(--acc) 7%,transparent);stroke:color-mix(in oklab,var(--acc) 24%,transparent);stroke-width:1}
+.sp .halos{opacity:0;transition:opacity .7s}
+.sp.p3 .halos{opacity:1}
+
+/* embedding offsets */
+.offsets{display:block;width:100%;overflow:visible}
+.offsets text{font:14px var(--sans);fill:var(--ink)}
+.offsets circle{fill:var(--ink2)}
+.offsets .end{opacity:0;transition:opacity .35s}
+.offsets .end.on{opacity:1}
+.offsets .end circle{fill:var(--acc)}
+.offsets .end text{fill:var(--acc)}
+.offsets .tip{fill:none;stroke:var(--acc);stroke-width:1.6}
+.offset-eq{opacity:0;transition:opacity .4s;display:flex;gap:5px 10px;justify-content:center;flex-wrap:wrap}
+.offset-eq.on{opacity:1}
+
+/* attention overview */
+.attention-overview{position:relative;display:grid;grid-template-columns:auto minmax(52px,1fr) auto;grid-template-rows:18px;grid-auto-rows:26px;gap:0 8px;align-items:center}
+.overview-row{display:flex;align-items:center;gap:6px}
+.overview-row .wc{gap:6px}
+.overview-row .tw{font-size:13px;width:5.7ch}
+.overview-row.focus .tw{color:var(--acc)}
+.overview-out{display:flex;align-items:center}
+.attention-block{position:relative;align-self:stretch;display:grid;place-items:center;border:1px solid var(--line);border-radius:12px;z-index:1;background:var(--faint);margin-block:5px;transition:border-color .5s}
+.attention-block .lbl{font-size:9px}
+.attention-block.on{border-color:var(--acc)}
+
+/* A single attention component, with nested camera views. */
+.station.attention-inside{background:var(--faint)}
+.camera-stage{position:absolute;inset:0;overflow:hidden;pointer-events:none;background:var(--bg);z-index:4}
+.attention-world{position:absolute;left:0;top:0;transform-origin:0 0;will-change:transform}
+.attention-frame{position:absolute;inset:0;border:2px solid var(--line);border-radius:32px;background:var(--faint)}
+.attention-world-title{position:absolute;left:7%;top:2.5%;font:500 52px/1 var(--mono);color:var(--muted)}
+.attention-branches{position:absolute;left:0;top:0;pointer-events:none;overflow:visible}
+.attention-branches path{fill:none;stroke:var(--line)}
+.attention-branches text{font-family:var(--mono);fill:var(--muted)}
+.attention-location{position:absolute;transform-origin:0 0}
+.attention-snapshot,.camera-detail{transform-origin:0 0}
+.camera-static,.camera-static *{animation:none!important;transition:none!important}
+.attention-glyph{position:absolute;inset:0;display:grid;align-content:center;justify-items:center;border:2px solid var(--line);border-radius:18px;background:var(--bg);opacity:0}
+.attention-glyph-title{font-family:var(--mono);font-weight:500;color:var(--ink2)}
+.attention-glyph-vector{display:grid;place-items:center}
+.attention-glyph-vector>.vg{transform-origin:center}
+.camera-detail{position:absolute;z-index:2}
+.attention-map{position:relative;height:370px;width:100%}
+
+/* one projection at a time */
+.projection-one{display:grid;gap:10px}
+.matrix-flow{display:grid;grid-template-columns:minmax(0,1fr) 12px auto 12px minmax(0,1fr);gap:8px;align-items:center;padding-block:4px}
+.matrix-end{display:grid;gap:10px;justify-items:center}
+.matrix-end .wc{gap:6px}
+.matrix-end .tw{font-size:14px;width:5.5ch}
+.matrix-arrow{font:12px var(--mono);color:var(--muted);opacity:.15;transition:opacity .4s}
+.matrix-arrow.on{opacity:1}
+.wm{display:grid;grid-template-columns:repeat(4,11px);gap:3px;padding:2px 5px;border-inline:1px solid var(--line)}
+.wm i{width:11px;height:11px;border-radius:1px;background:color-mix(in oklab,var(--ink) calc(8% + var(--a) * 55%),var(--faint));transition:background .4s}
+.wm.active i{background:color-mix(in oklab,var(--acc) calc(15% + var(--a) * 65%),var(--faint))}
+.matrix-status{margin:0;text-align:center;font:11px/1.5 var(--mono);color:var(--ink2);min-height:3em}
+.matrix-samples{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:12px;opacity:0;transition:opacity .4s}
+.matrix-samples.on{opacity:1}
+.matrix-sample{display:grid;gap:8px;justify-items:center}
+.feature-space{display:grid;gap:18px;max-width:410px;margin-inline:auto}
+.feature-intro{display:flex;gap:12px;align-items:center;justify-content:center}
+.feature-intro .tw{width:auto}
+.feature-map{display:grid;gap:5px}
+.feature-columns,.feature-row{display:grid;grid-template-columns:minmax(0,1fr) repeat(4,18px);gap:10px;align-items:center}
+.feature-columns .lbl{font-size:9px;white-space:normal}
+.feature-axis{text-align:center;font:10px var(--mono);color:var(--muted);transition:color .4s}
+.feature-axis.on{color:var(--acc)}
+.feature-row{min-height:44px;opacity:0;transition:opacity .45s}
+.feature-row.on{opacity:1}
+.feature-name{font-size:14px;line-height:1.35;transition:color .4s}
+.feature-row.current .feature-name{color:var(--acc)}
+.feature-cell{width:12px;height:12px;justify-self:center;border-radius:2px;background:var(--line);transition:background .45s}
+.feature-row.on .feature-cell.used{background:color-mix(in oklab,var(--acc) calc(var(--a) * 85%),var(--line))}
+.feature-note{margin:0;font:10px/1.5 var(--mono);text-align:center;color:var(--muted)}
+.feature-example{min-height:44px;display:flex;justify-content:center;align-items:center;gap:9px;flex-wrap:wrap;opacity:0;transition:opacity .5s;font-size:14px}
+.feature-example.on{opacity:1}
+.feature-example small{font:10px/1.4 var(--mono);color:var(--muted);text-align:center}
+.ar{font:500 11px var(--mono);color:var(--muted);text-align:center}
+.foot{margin:12px 0 0;text-align:center;white-space:normal;line-height:1.5}
+
+/* multiple heads */
+.heads{display:grid;gap:12px}
+.heads-input{display:flex;gap:12px;align-items:center;justify-content:center}
+.heads-table{display:grid;grid-template-columns:58px minmax(0,1fr) minmax(0,1fr);gap:8px 12px;align-items:center}
+.head-heading{display:grid;gap:6px;justify-items:center}
+.head-matrices{display:flex;gap:9px}
+.head-matrices .item{justify-items:center;gap:3px}
+.head-matrices small{font-size:8px}
+.mini-matrix{display:grid;grid-template-columns:repeat(8,2px);gap:1px}
+.mini-matrix i{width:2px;height:2px;background:color-mix(in oklab,var(--ink) calc(10% + var(--a) * 65%),var(--faint))}
+.head-word{font-size:13px;line-height:22px}
+.head-weight{display:flex;gap:5px;align-items:center}
+.head-weight .pc{font-size:10px;width:3.5ch;flex:none}
+.head-track{height:5px;min-width:0;flex:1;background:var(--line);border-radius:3px;overflow:hidden}
+.head-fill{display:block;width:0;height:100%;background:var(--acc);transition:width .8s}
+.heads-table>.item{justify-self:center}
+.heads-result{justify-content:center;gap:8px}
+.heads-result .item{justify-items:center}
+@media(max-width:480px){.map{gap:10px}.dts{gap:3px}}
+
+/* attention at every position */
+.attn-grid{display:grid;gap:2px}
+.attn-head,.attn-row,.attn-values{display:grid;grid-template-columns:82px minmax(0,1fr) 30px;gap:10px;align-items:center}
+.attn-head{margin-bottom:6px}
+.attn-head>.lbl:last-child{text-align:center}
+.attn-keys,.weight-strip,.value-strip{display:grid;grid-template-columns:repeat(10,minmax(0,1fr));gap:3px}
+.attn-keys>span{display:grid;justify-items:center;gap:3px;font:9px var(--mono);color:var(--muted)}
+.attn-keys .vg,.value-strip .vg{gap:1px;height:18px;padding:0}
+.attn-keys .vg i,.value-strip .vg i{width:2px}
+.attn-row{height:22px}
+.attn-row>.vg{height:22px}
+.attn-row .wc{gap:7px}
+.attn-row .tw{font-size:14px}
+.attn-row.focus .tw{color:var(--acc)}
+.weight-cell{height:12px;border-radius:2px;background:var(--line);opacity:.3;transition:background .3s,opacity .3s}
+.weight-cell.future{background:linear-gradient(135deg,transparent 44%,var(--muted) 46%,var(--muted) 54%,transparent 56%)}
+.attn-row.scores .weight-cell:not(.future){opacity:.8;background:color-mix(in oklab,var(--ink) calc(8% + var(--s) * 50%),var(--faint))}
+.attn-row.weights .weight-cell:not(.future){opacity:1;background:color-mix(in oklab,var(--acc) calc(5% + var(--w) * 95%),var(--faint))}
+.attn-values{margin-top:7px}
+.value-strip>.vg{justify-self:center;opacity:.2;transition:opacity .3s}
+.attn-formula{display:flex;gap:5px;justify-content:center;align-items:center;flex-wrap:wrap;margin-top:14px;font:10px/1.5 var(--mono);color:var(--muted)}
+.attn-formula .active{color:var(--acc)}
+
+/* 4 scores */
+.t4{position:relative;display:grid;grid-template-columns:auto minmax(28px,100px) auto;grid-auto-rows:26px;align-items:center;justify-content:center}
+.krow{grid-column:1;display:flex;align-items:center;gap:9px}
+.krow .pc{opacity:0;transition:opacity .4s}
+.t4.w .krow .pc{opacity:1}
+.t4.scores .krow .pc{opacity:1}
+.krow.hid{opacity:.38}
+.t4.w .krow.gl .tw,.t4.w .krow.gl .pc{color:var(--acc);font-weight:600}
+.t4.w .krow.gl .vg i{background:var(--acc)}
+.qcol{grid-column:3;display:flex;align-items:center;gap:8px}
+.qcol .tw{width:auto;color:var(--acc);font-weight:600}
+.dot-example{display:grid;gap:7px;margin-top:14px;text-align:center}
+.dot-terms{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:6px}
+.dot-term{display:grid;gap:3px;font:500 clamp(9px,2.7vw,11px)/1.4 var(--mono);color:var(--muted)}
+.dot-term b{font-weight:500;color:var(--acc);opacity:0;transition:opacity .3s}
+.dot-term.on b{opacity:1}
+.math-note{font:10.5px/1.5 var(--mono);color:var(--ink2);margin:0;text-align:center;min-height:3em}
+.dot-example .math-note{min-height:1.5em}
+
+/* 5 mix */
+.t5{position:relative;display:grid;grid-template-columns:auto auto;column-gap:clamp(20px,6vw,52px);align-items:center;justify-content:center}
+.mrow{display:flex;align-items:center;gap:8px;height:var(--rh)}
+.mrow.gl .tw,.mrow.gl .pc{color:var(--acc);font-weight:600}
+.eqcol{display:grid;gap:12px;justify-items:start}
+.eqr{display:flex;align-items:flex-end;gap:10px;opacity:0;transform:translateX(-6px);transition:opacity .4s,transform .4s}
+.eqr.on{opacity:1;transform:none}
+.t5+.math-note{margin-top:14px}
+
+/* 6 feed-forward */
+.t6{display:grid;gap:16px;justify-items:center}
+.mlp{display:block;max-width:100%;height:auto;overflow:visible}
+.mlp line{stroke:var(--line);stroke-width:.7}
+.mlp circle{fill:color-mix(in oklab,var(--ink) calc(12% + var(--a) * 66%),var(--bg));transition:fill .5s}
+.mlp .n2 circle{fill:color-mix(in oklab,var(--acc) calc(25% + var(--a) * 75%),var(--bg))}
+.mlp text{font:500 10px var(--mono);fill:var(--muted)}
+.mlp .bend{fill:none;stroke:var(--acc);stroke-width:2;stroke-linecap:round}
+.mlp .g{opacity:0;transition:opacity .55s}
+.mlp .n0{opacity:1}
+.mlp.p1 .l1{opacity:1}
+.mlp.p1 .n1{opacity:1;transition-delay:.35s}
+.mlp.p2 .bd{opacity:1}
+.mlp.p3 .l2{opacity:1;transition-delay:.3s}
+.mlp.p3 .n2{opacity:1;transition-delay:.65s}
+
+
+.ff-example{display:grid;gap:10px;text-align:center;width:100%;font:12px/1.5 var(--mono);color:var(--ink2)}
+.ff-signals{display:flex;justify-content:center;gap:7px;flex-wrap:wrap}
+.ff-signals span{border-bottom:1px solid var(--line);padding:3px 4px}
+.ff-concept{color:var(--acc);opacity:0;transition:opacity .5s}
+.ff-example.on .ff-concept{opacity:1}
+.ff-foot{font:10px/1.5 var(--mono);color:var(--muted);text-align:center;margin:0}
+.ff-map{display:block;width:100%;max-height:440px;height:auto;overflow:visible}
+.ff-map text{font:10px var(--mono);fill:var(--ink2)}
+.ff-map .ff-title{font-size:11px;fill:var(--ink)}
+.ff-map .ff-border{fill:var(--faint);stroke:var(--line);stroke-width:1}
+.ff-map .ff-wire{fill:none;stroke:var(--muted);stroke-width:1}
+.ff-map .ff-stage{opacity:0;transition:opacity .5s}
+.ff-map .ff-stage.on{opacity:1}
+.ff-map .ff-sum{font-size:19px;fill:var(--ink)}
+.ff-map .ff-network text{font-size:10px}
+
+
+/* Whole-matrix and network views, using the existing palette and marks. */
+.matrix-intro{display:grid;justify-content:center;gap:2px;margin-bottom:14px}
+.matrix-input-row{display:flex;gap:24px;align-items:center;height:25px}
+.all-projections{display:grid;grid-template-columns:auto repeat(3,1fr);align-items:center;justify-items:center;gap:4px 12px;margin-bottom:16px}
+.all-projections .wc{justify-self:start}.all-projections .tw{font-size:13px}
+.wide-svg{display:block;width:100%;height:auto;max-height:430px;overflow:visible}
+.wide-svg text{font:10px var(--mono);fill:var(--ink2)}
+.wide-svg .wide-box{fill:var(--faint);stroke:var(--line);stroke-width:1}
+.wide-wire{fill:none;stroke:var(--muted);stroke-width:.8}
+.mini-attention{fill:var(--ink2);opacity:.4}
+.depth-stage{opacity:.2;transition:opacity .5s}.depth-stage.lit{opacity:1}
+.pipeline-block{opacity:.4;transition:opacity .3s}
+.pipeline-block.lit{opacity:1}.pipeline-block.lit .mini-attention{fill:var(--acc);opacity:.8}
+.wide-svg .block-number{font-size:10px}
+.vocab-slot{fill:var(--line)}.vocab-prob{fill:var(--acc)}
+.vocab-bars{display:grid;grid-template-columns:repeat(27,minmax(0,1fr));gap:3px;align-items:end;height:150px;margin:14px 0}
+.vocab-column{display:grid;grid-template-rows:100px 25px;align-items:end;gap:18px;min-width:0}
+.prob-stick{background:var(--ink2);border-radius:2px;display:block}
+.one-stick{display:block;height:4px;background:var(--line);opacity:0;transition:opacity .4s}
+.one-stick.selected{height:25px;background:var(--acc)}.one-stick.on{opacity:1}
+.picked-token{text-align:center;color:var(--acc);font:16px var(--mono);padding:18px 0;opacity:0;transition:opacity .4s}.picked-token.on{opacity:1}
+.cache-compare{display:grid;grid-template-columns:auto 1fr 1fr;gap:18px 12px;align-items:center;padding:18px 0 26px}
+.cache-compare .lbl{font-size:10px}.work-strip{display:flex;gap:2px;height:16px;opacity:.15;transition:opacity .45s}.work-strip.on{opacity:1}
+.work-strip i{flex:1;max-width:10px;border-radius:1px;background:var(--acc)}.work-strip .saved{background:var(--muted);opacity:.45}
+.cache-cell{fill:var(--ink2);opacity:.5}.cache-cell.fresh{fill:var(--acc);opacity:0;transition:opacity .5s}.cache-cell.fresh.on{opacity:1}
+@media(max-width:700px){.map{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:12px 8px}.grp>span{font-size:9px}.map .d{width:5px;height:5px;border-width:1px}.dts{gap:2px}.dts::before{left:0;right:0}.all-projections{gap:4px 6px}}
+
+
+.output-overview{display:grid;gap:9px;justify-items:center}
+.output-vector{display:flex;gap:15px;align-items:center}.output-vector .tw{width:auto;color:var(--acc)}
+.output-down{font:14px var(--mono);color:var(--muted)}
+.output-projection{display:grid;gap:4px;border:1px solid var(--line);border-radius:8px;text-align:center;padding:10px 20px;font:12px var(--mono);opacity:.35;transition:opacity .4s}
+.output-projection small{font:10px var(--mono);color:var(--muted)}.output-projection.on{opacity:1}
+.output-table{display:grid;grid-template-columns:auto auto minmax(0,1fr);align-items:center;gap:10px 12px;width:100%;font:12px var(--mono);opacity:.15;transition:opacity .5s}.output-table.on{opacity:1}
+.output-table .lbl{font-size:9px;white-space:normal}.output-score{color:var(--muted);font-size:11px}.output-probability{display:flex;gap:6px;align-items:center}.output-probability .pt{flex:1;min-width:20px}.output-probability .pv{font-size:10px;min-width:4ch}
+.output-vocabulary{display:grid;grid-template-columns:repeat(27,minmax(0,1fr));gap:3px;align-items:end;width:100%;height:40px;opacity:0;transition:opacity .5s}.output-vocabulary.on{opacity:1}.output-vocabulary i{background:var(--acc);border-radius:1px}
+
+/* 7 layer 2 */
+.t7{position:relative;display:grid;padding-left:60px}
+.lrow{display:flex;align-items:center;gap:9px;height:var(--rh)}
+.lrow .pc{margin-left:auto;opacity:0;transition:opacity .4s .4s}
+.t7.p2 .lrow .pc{opacity:1}
+.lrow.strong .pc{color:var(--acc);font-weight:600}
+.tag{font:500 10px/1 var(--mono);color:var(--acc);border:1px solid var(--acc);border-radius:99px;padding:3px 7px;white-space:nowrap;opacity:0;transition:opacity .35s .5s}
+.t7.p1 .tag{opacity:1}
+.ln.arc{stroke:var(--acc);stroke-linecap:round}
+
+/* 8 output */
+.t8{display:grid;gap:14px}
+.ohead{display:flex;flex-wrap:wrap;align-items:center;gap:8px 10px}
+.ohead .tw{width:auto;color:var(--acc);font-weight:600}
+.plist{display:grid;gap:3px}
+.prow{display:grid;grid-template-columns:7.2ch 1fr 4.6ch;gap:10px;align-items:center;height:22px}
+.prow .w2{font-size:14px;white-space:nowrap}
+.prow.top .w2{color:var(--acc);font-weight:600}
+.pt{height:8px;border-radius:4px;background:color-mix(in oklab,var(--ink) 6%,var(--bg));overflow:hidden}
+.pb{display:block;height:100%;width:0;border-radius:4px;background:var(--ink2);transition:width .45s cubic-bezier(.3,.7,.2,1)}
+.prow.top .pb{background:var(--acc)}
+.pb.o{background:var(--muted)}
+.pv{font:500 11.5px/1 var(--mono);text-align:right;font-variant-numeric:tabular-nums}
+.trow2{display:grid;grid-template-columns:auto 1fr 3ch;gap:12px;align-items:center}
+.trow2 input{width:100%;accent-color:var(--acc)}
+.tv{font:500 12px var(--mono);text-align:right;font-variant-numeric:tabular-nums}
+.rw{display:grid;gap:5px}
+.ruler{position:relative;display:flex;height:30px;border-radius:8px;overflow:hidden;transform-origin:left;transition:transform .55s cubic-bezier(.3,.7,.2,1),opacity .35s}
+.ruler.pre{transform:scaleX(.2);opacity:0}
+.seg{flex:0 0 auto;display:flex;align-items:center;justify-content:center;overflow:hidden;white-space:nowrap;font:500 11px var(--mono);color:var(--ink);background:color-mix(in oklab,var(--acc) calc(70% - var(--s) * 11%),var(--bg));border-right:1px solid var(--bg);transition:flex-basis .3s}
+.seg:first-child{color:var(--bg)}
+.seg.o{background:color-mix(in oklab,var(--ink) 7%,var(--bg));color:var(--muted)}
+.seg.tiny{color:transparent!important}
+/* The draw animation owns marker movement, including its final landing. */
+.mk{position:absolute;top:0;bottom:0;width:3px;margin-left:-1.5px;background:var(--ink);transition:none}
+.ticks{display:flex;justify-content:space-between}
+.srow{display:flex;flex-wrap:wrap;align-items:center;gap:8px 14px}
+.sb{height:38px;padding:0 16px;border-radius:999px;border:1px solid var(--line);background:var(--bg);font-size:14px;font-weight:500;cursor:pointer}
+.draw-spinner{display:none;width:11px;height:11px;border:1.5px solid var(--line);border-top-color:var(--acc);border-radius:50%;margin-right:7px;vertical-align:-1px}
+.sb.drawing .draw-spinner{display:inline-block;animation:draw-spin .6s linear infinite}
+.sb:disabled{cursor:default}.mk.spinning{transition:none}
+@keyframes draw-spin{to{transform:rotate(360deg)}}
+@media(prefers-reduced-motion:reduce){.sb.drawing .draw-spinner{animation:none}}
+.out{font:500 12px var(--mono);color:var(--ink2)}
+
+/* 9 loop */
+.t9w{position:relative;display:grid;gap:14px}
+.pline.sm{position:static;transform:none;font-size:clamp(14px,3.9vw,17px);text-align:left;padding-left:2px}
+.endt{display:none;font:500 10px/1 var(--mono);color:var(--muted);border:1px solid var(--line);border-radius:6px;padding:3px 6px;margin-left:.5em;vertical-align:.2em}
+.t9w.e .endt{display:inline-block}
+.t9w.e .cursor{display:none}
+.t9{display:grid;grid-template-columns:auto auto;grid-auto-rows:minmax(22px,auto);column-gap:16px;align-items:center;justify-content:center}
+.t9 .hd{grid-column:1 / -1;text-align:center;height:22px}
+.kv{display:flex;gap:6px}
+.t9 .vg{height:20px}
+.t9 .vg i{width:4px}
+.t9.r .kv .vg{animation:read .8s ease-in-out both;animation-delay:calc(var(--k) * 70ms)}
+@keyframes read{40%{transform:scale(1.25)}}
+@keyframes readc{40%{opacity:1}}
+.t9.r .kv .vg i{background:var(--ink2)}
+.nr{opacity:0;transition:opacity .4s}
+.t9.n .nr{opacity:1}
+.nr.wc{border-top:1px dashed var(--line);padding-top:6px;margin-top:6px}
+.pill{position:absolute;right:6px;top:-4px;font-size:15px;font-weight:600;color:var(--bg);background:var(--acc);border-radius:999px;padding:4px 12px;opacity:0}
+
+@media (min-width:640px){
+  :root{--rh:30px}
+  .tw{font-size:16px}
+  .cap{font-size:18px}
+  .tbl{--tc:8px}
+}
+@media (prefers-reduced-motion: reduce){
+  *,*::before,*::after{animation:none!important;transition:none!important}
+}
+@media (max-width:380px){
+  .map{gap:5px}
+  .dts{gap:2px}
+  .t3{column-gap:5px}
+  .t3 .vg{gap:1px}
+  .t3 .vg i{width:4px}
+  .t3 .wc{gap:5px}
+  .t3 .tw{width:5.5ch}
+  .t3 .pn{width:1.5ch}
+}
+</style>
+</head>
+<body>
+
+
+<div class="app">
+  <nav class="map" id="map" aria-label="Where you are in the network"></nav>
+  <section class="vp" id="vp" aria-live="off"></section>
+  <footer class="dock">
+    <p class="cap" id="cap" aria-live="polite">The model reads the prompt as a list of tokens.</p>
+    <div class="ctl">
+      <button class="ib" id="back" type="button" aria-label="Back"><svg class="ico" viewBox="0 0 24 24"><path d="M15 6l-6 6 6 6"/></svg></button>
+      <button class="tb" id="replay" type="button">Replay</button>
+      <button class="nb" id="next" type="button"><span>Next</span><svg class="ico" viewBox="0 0 24 24"><path d="M9 6l6 6-6 6"/></svg></button>
+    </div>
+  </footer>
+</div>
+
+<script>
+(function(){
+'use strict';
+
+/* ---------- the tiny model ---------- */
+var VOCAB=['⟨s⟩','⟨end⟩','she','he','poured','water','milk','into','the','glass','cup','until','it','was','full','empty','cold','warm','half','and','a','spilled','over','her','kite','cheap','.'];
+var IDS=[0,2,4,5,7,8,9,11,12,13];
+var SHOW=['⟨s⟩','She','poured','water','into','the','glass','until','it','was'];
+var N=10,IT=8,GLASS=6,WAS=9,FULL=14;
+
+function rng(a){return function(){a|=0;a=a+0x6D2B79F5|0;var t=Math.imul(a^a>>>15,1|a);t=t+Math.imul(t^t>>>7,61|t)^t;return((t^t>>>14)>>>0)/4294967296;};}
+var R=rng(1009);
+function rnd(lo,hi){return lo+(hi-lo)*R();}
+function r2(x){return Math.round(x*100)/100;}
+function vec(n,s){var o=[];for(var i=0;i<n;i++)o.push(r2(rnd(-s,s)));return o;}
+function mat(r,c,s){var o=[];for(var i=0;i<r;i++)o.push(vec(c,s));return o;}
+function matvec(M,v){return M.map(function(row){return row.reduce(function(a,w,i){return a+w*v[i];},0);});}
+function add(a,b){return a.map(function(x,i){return r2(x+b[i]);});}
+function softmax(a,T){
+  if(T===undefined)T=1;
+  if(T<=0){var m=0;a.forEach(function(x,i){if(x>a[m])m=i;});return a.map(function(_,i){return i===m?1:0;});}
+  var mx=Math.max.apply(null,a),e=a.map(function(x){return Math.exp((x-mx)/T);}),s=e.reduce(function(p,c){return p+c;},0);
+  return e.map(function(x){return x/s;});
+}
+function rms(v){var m=Math.sqrt(v.reduce(function(s,x){return s+x*x;},0)/v.length+1e-6);return v.map(function(x){return x/m;});}
+function silu(x){return x/(1+Math.exp(-x));}
+
+var E=VOCAB.map(function(){return vec(8,0.85);});
+var HAND={0:[0.05,-0.1,0,0.1,0,0,0,0.2],2:[-0.6,0,-0.7,-0.2,-0.1,-0.1,0.1,0],4:[0.85,0.7,0,-0.2,0.75,0.3,0,0],5:[-0.7,0,0.2,0.1,0.95,0.1,0.1,0],7:[0.1,0,0,-0.3,0.2,0.6,0,0],8:[-0.2,0,0,0,0,0,0,0.1],9:[-0.8,0,-0.5,0.1,0.4,0.9,0.1,0],11:[0.2,0.1,0,0.4,0,0,0,0.1],12:[-0.5,0,-0.6,0,0,0,0,-0.1],13:[0.35,0.82,-0.6,0.7,-0.05,-0.1,0.02,0.15],14:[-0.1,0,0,0.85,0.3,0.6,0.3,0]};
+Object.keys(HAND).forEach(function(k){E[k]=HAND[k];});
+var Q=mat(N,4,1.2),K=mat(N,4,1.2),V=mat(N,4,1);
+Q[IT]=[1.2,0.8,-0.5,1.0];K[GLASS]=[2.0,1.5,-0.6,0.7];V[GLASS]=[0.9,-0.4,0.7,0.2];
+var S1=[],i,j,row;
+for(i=0;i<N;i++){row=[];for(j=0;j<=i;j++)row.push(r2(rnd(-0.4,0.4)+(j===i?0.7:0)+(j===0?0.5:0)));S1.push(row);}
+S1[IT]=[0.2,0.1,0.6,1.3,0.0,0.1,2.3,-0.3,0.9];
+// Fixed illustrative projections, chosen to retain the original it → glass example.
+// Each stored matrix is output × input; the diagram displays its transpose.
+var WQ=[[-0.02863038,-0.25939304,-0.22100167,-0.01647318,0.10645667,-0.27620517,-0.26927345,-0.24818861],[0.45703405,-0.11870494,0.25796552,0.29029829,0.1230515,-0.17397974,-0.04536519,-0.20378782],[0.15185856,-0.11866384,0.04872463,0.20548153,0.23814364,0.01056116,0.081244,0.11338311],[-0.20629949,0.2966454,-0.31701152,-0.21487109,0.11569658,0.1142921,0.21251236,0.04733293]];
+var WK=[[-0.04895645,-0.43953253,-0.12861912,0.05215914,-0.13267108,0.76489226,-0.16281581,-0.10081082],[0.05916819,-0.35298303,0.39128849,-0.16978729,0.00474865,1.30773923,0.5018792,0.52274734],[-0.04574691,-0.10334056,-0.14087247,0.09646044,-0.75593286,-0.11718819,0.21172778,0.12794613],[-0.05005549,-0.00961401,0.0126635,0.0495567,0.91911108,-0.05960268,0.03498572,-0.39474341]];
+var WV=[[-0.24713508,0.11947239,-0.0137229,-0.08501678,0.17291633,0.15534977,0.31242954,-0.16027658],[0.07616532,0.21056841,0.0619825,-0.15855395,-0.22632129,-0.00446688,0.08420007,-0.1094109],[-0.2670609,0.01267771,0.12526132,0.11488675,-0.18878597,0.24878743,0.28437275,-0.05017822],[0.11168971,0.2402575,-0.23586015,-0.0740574,-0.11153836,0.12008911,0.1231639,0.16262528]];
+function rope(v,pos){var out=[];for(var d=0;d<4;d+=2){var a=pos*(d===0?1:.01),co=Math.cos(a),si=Math.sin(a);out.push(v[d]*co-v[d+1]*si,v[d]*si+v[d+1]*co);}return out;}
+function dot(a,b){return a.reduce(function(s,x,k){return s+x*b[k];},0);}
+var INPUT=IDS.map(function(id){return rms(E[id]);});
+var RAWQ=INPUT.map(function(x){return matvec(WQ,x);}),RAWK=INPUT.map(function(x){return matvec(WK,x);});
+Q=RAWQ.map(rope);K=RAWK.map(rope);V=INPUT.map(function(x){return matvec(WV,x);});
+S1=Q.map(function(q,k){return K.slice(0,k+1).map(function(key){return dot(q,key)/2;});});
+var WEIGHTS=S1.map(function(s){return softmax(s);});
+var MIXES=WEIGHTS.map(function(ws){return [0,1,2,3].map(function(d){return ws.reduce(function(s,w,k){return s+w*V[k][d];},0);});});
+var WIT=softmax(S1[IT]);
+var BLEND=[0,1,2,3].map(function(c){return r2(WIT.reduce(function(s,w,j){return s+w*V[j][c];},0));});
+var S2=[];for(i=0;i<N;i++){row=[];for(j=0;j<=i;j++)row.push(r2(rnd(-0.3,0.3)+(j===i-1?2.4:0)+(j===i?0.3:0)));S2.push(row);}
+var V2=mat(N,4,1),W2it=softmax(S2[IT]);
+var WQ2=[[0.30461507,-0.27373481,-0.03209964,0.20352755,0.05228583,-0.16517686,0.15107536,-0.09913758],[0.0754742,-0.02938117,0.42137369,0.235141,-0.13282018,-0.13287942,-0.04680026,-0.27285587],[-0.36442386,0.27105241,-0.09681088,0.02107695,-0.00870687,0.26707601,0.05590451,0.21576513],[0.05293434,-0.27974121,-0.52381728,0.1567193,-0.22431752,-0.09489429,-0.11998843,-0.01853189]];
+var WK2=[[-0.11903736,0.2061539,-0.03377892,0.09393401,-0.17834716,-0.24169845,-0.11834919,-0.11762986],[-0.09714309,-0.40565822,0.36552323,-0.9131977,0.21694021,0.03937953,-0.03173604,0.12145365],[-0.02897291,-0.0679893,-0.26082048,0.31794032,0.00484806,-0.19900138,-0.26973094,0.26079365],[0.04790873,0.30040817,-0.07704395,0.61355995,0.12402373,-0.0906684,-0.1390317,-0.24612296]];
+var WV2=[[-0.03180435,-0.00455345,0.14943789,0.00499861,0.08723947,-0.0888219,-0.24072674,-0.11766656],[0.29577406,0.25177031,0.10285534,0.1876226,0.19900784,0.1134823,0.07472391,-0.03496682],[-0.02962675,-0.0877042,0.35309395,-0.17475408,0.07133597,-0.09664093,0.00563553,-0.01636409],[0.10802624,-0.09160497,0.15012131,0.0917541,0.2008475,0.00139387,-0.11721454,0.42062449]];
+var Q2=INPUT.map(function(x,k){return rope(matvec(WQ2,x),k);}),K2=INPUT.map(function(x,k){return rope(matvec(WK2,x),k);});
+V2=INPUT.map(function(x){return matvec(WV2,x);});
+S2=Q2.map(function(q,k){return K2.slice(0,k+1).map(function(key){return dot(q,key)/2;});});
+W2it=softmax(S2[IT]);
+var HEAD2=[0,1,2,3].map(function(c){return r2(W2it.reduce(function(s,w,j){return s+w*V2[j][c];},0));});
+var WO=mat(8,8,0.45);
+var UPD=matvec(WO,BLEND.concat(HEAD2)).map(r2);
+var WO1=WO.map(function(row){return row.slice(0,4);});
+var SINGLEUPDATES=MIXES.map(function(mix){return matvec(WO1,mix.map(r2)).map(r2);});
+var SINGLEROWS=IDS.map(function(id,k){return add(E[id],SINGLEUPDATES[k]);});
+var ROWIT=E[12],NEWROW=add(ROWIT,UPD);
+var X=rms(NEWROW),Wg=mat(16,8,0.5),Wu=mat(16,8,0.5),Wd=mat(8,16,0.35);
+var GATE=matvec(Wg,X),UP=matvec(Wu,X),PROD=GATE.map(function(g,k){return silu(g)*UP[k];});
+var DOWN=matvec(Wd,PROD).map(r2),LAYER1=add(NEWROW,DOWN);
+var L1OUT=IDS.map(function(id,k){var b=E[id].map(function(x){return r2(x+rnd(-0.25,0.25));});if(k===IT)b=add(b,[0,0,0.1,0.2,0.35,0.55,0,0]);return b;});
+var AFTERATTN=IDS.map(function(id,k){
+  var w2=softmax(S2[k]),h2=[0,1,2,3].map(function(d){return r2(w2.reduce(function(sum,w,j){return sum+w*V2[j][d];},0));});
+  var update=matvec(WO,MIXES[k].map(r2).concat(h2)).map(r2);
+  return add(E[id],update);
+});
+var FFUPDATES=AFTERATTN.map(function(row){
+  var x=rms(row),gate=matvec(Wg,x),up=matvec(Wu,x),product=gate.map(function(g,d){return silu(g)*up[d];});
+  return matvec(Wd,product).map(r2);
+});
+L1OUT=AFTERATTN.map(function(row,k){return add(row,FFUPDATES[k]);});
+var WL2=softmax([0.1,0.0,0.5,0.8,-0.2,0.0,1.7,0.3,2.0,0.6]);
+var L2WAS=vec(8,0.9);
+var LOG=VOCAB.map(function(){return r2(rnd(-3,-1));});
+var LSET={14:4.0,15:2.7,18:2.1,16:1.8,17:1.4,21:0.9,22:0.6,1:0.2,26:0.1};
+Object.keys(LSET).forEach(function(k){LOG[k]=LSET[k];});
+var ORDER=VOCAB.map(function(_,k){return k;}).sort(function(a,b){return LOG[b]-LOG[a];});
+var QN=vec(4,1.2),KN=vec(4,1.2),VN=vec(4,1);
+var TEMP=1,CHOSEN=FULL;
+
+/* ---------- helpers ---------- */
+function A(x){return Math.min(1,Math.abs(x)).toFixed(2);}
+function f(x){return x.toFixed(1);}
+function pct(p){if(p<=0)return '0%';if(p>=0.995)return '100%';if(p<0.005)return '<1%';return Math.round(p*100)+'%';}
+function kid(el,c){if(c==null||c===false)return;if(Array.isArray(c)){c.forEach(function(x){kid(el,x);});return;}el.append(c.nodeType?c:document.createTextNode(String(c)));}
+function h(tag,attrs){
+  var el=document.createElement(tag);
+  if(attrs)for(var k in attrs){var v=attrs[k];if(v==null)continue;if(k==='class')el.className=v;else if(k==='text')el.textContent=v;else if(k==='style')el.style.cssText=v;else el.setAttribute(k,v);}
+  for(var n=2;n<arguments.length;n++)kid(el,arguments[n]);
+  return el;
+}
+var NS='http://www.w3.org/2000/svg';
+function sv(tag,attrs){var el=document.createElementNS(NS,tag);if(attrs)for(var k in attrs)el.setAttribute(k,attrs[k]);for(var n=2;n<arguments.length;n++){if(arguments[n])el.append(arguments[n]);}return el;}
+function bars(v,cls){
+  var g=h('span',{class:'vg'+(cls?' '+cls:'')});
+  v.forEach(function(x,n){var hh=Math.max(2,Math.sqrt(Math.min(1,Math.abs(x)))*12);g.append(h('i',{class:x>=0?'u':'d',style:'--h:'+hh.toFixed(1)+'px;--j:'+n}));});
+  return g;
+}
+function paintBars(g,v){
+  v.forEach(function(x,d){var bar=g.children[d],hh=Math.max(2,Math.sqrt(Math.min(1,Math.abs(x)))*12);bar.className=x>=0?'u':'d';bar.style.cssText='--h:'+hh.toFixed(1)+'px;--j:'+d;});
+  g.dataset.values=v.map(function(x){return x.toFixed(6);}).join(',');
+}
+function wc(k,word){return h('span',{class:'wc'+(k===WAS?' me':''),'data-c':String(k)},h('span',{class:'pn',text:String(k)}),h('span',{class:'tw',text:word||SHOW[k]}));}
+function item(node,label){return h('span',{class:'item'},node,h('small',{text:label}));}
+function panel(label){return h('div',{class:'panel'},h('span',{class:'plbl',text:label}));}
+function rel(el,base){var a=el.getBoundingClientRect(),b=base.getBoundingClientRect();return {x:a.left-b.left,y:a.top-b.top,w:a.width,h:a.height,cx:a.left-b.left+a.width/2,cy:a.top-b.top+a.height/2};}
+function overlay(c){var r=c.getBoundingClientRect();var o=sv('svg',{class:'ov',width:f(r.width),height:f(r.height),viewBox:'0 0 '+f(r.width)+' '+f(r.height),'aria-hidden':'true'});c.append(o);return o;}
+function curve(x1,y1,x2,y2){var m=(x1+x2)/2;return 'M'+f(x1)+' '+f(y1)+' C'+f(m)+' '+f(y1)+' '+f(m)+' '+f(y2)+' '+f(x2)+' '+f(y2);}
+function path(svg,d,cls){var p=sv('path',{d:d,class:'ln'+(cls?' '+cls:''),pathLength:'1'});svg.append(p);return p;}
+function dial(k){return sv('svg',{class:'dial',viewBox:'0 0 20 20','aria-hidden':'true'},sv('circle',{cx:10,cy:10,r:8}),sv('line',{x1:10,y1:10,x2:10,y2:3.5,style:'--a:'+(k*180/Math.PI).toFixed(1)+'deg;--k:'+k}));}
+function fly(src,dst,base,dur,fade,arrive){
+  var a=rel(src,base),b=rel(dst,base),g=src.cloneNode(true);
+  g.classList.add('ghost');g.classList.remove('z');g.style.left=f(a.x)+'px';g.style.top=f(a.y)+'px';base.append(g);
+  var an=motion(g,[{transform:'translate(0px,0px)',opacity:1},{transform:'translate('+f(b.x-a.x)+'px,'+f(b.y-a.y)+'px)',opacity:fade?0:1}],{duration:dur,easing:'cubic-bezier(.65,0,.35,1)',fill:'forwards'});
+  an.onfinish=function(){g.remove();if(arrive)arrive();};
+}
+
+function matrixLesson(kind,caption,M,focus,examples){
+  return {cap:caption,camera:{level:'projection',kind:kind},build:function(inner){
+    var p=panel('attention · '+kind),g=h('div',{class:'projection-one'});
+    var input=bars(INPUT[focus]),out=bars(matvec(M,INPUT[focus]),'z acc'),matrix=h('div',{class:'wm','aria-label':'learned '+kind+' projection matrix'});
+    for(var r=0;r<8;r++)for(var d=0;d<4;d++)matrix.append(h('i',{style:'--a:'+A(M[d][r])}));
+    var inArrow=h('span',{class:'matrix-arrow',text:'→'}),outArrow=h('span',{class:'matrix-arrow',text:'→'});
+    var flow=h('div',{class:'matrix-flow'},h('div',{class:'matrix-end'},wc(focus),input,h('span',{class:'lbl',text:'input vector'})),inArrow,item(matrix,'W'+kind[0]+' · 8 × 4'),outArrow,h('div',{class:'matrix-end'},h('span',{class:'lbl',text:kind}),out,h('span',{class:'lbl',text:'4 numbers'})));
+    var status=h('p',{class:'matrix-status',text:{key:'features other tokens can match',query:'features this token looks for',value:'information this token can contribute'}[kind]}),samples=h('div',{class:'matrix-samples'}),outputs=[];
+    examples.forEach(function(k){var b=bars(matvec(M,INPUT[k]),'z');samples.append(h('div',{class:'matrix-sample'},h('span',{class:'lbl',text:SHOW[k]}),b));outputs.push(b);});
+    g.append(flow,status,samples,h('p',{class:'lbl foot',text:'same W'+kind[0]+' for every token · 4 dimensions per head, chosen for this example'}));p.append(g);inner.append(p);
+    return {play:async function(c){
+      await c.wait(350);c.cls(inArrow,'on');c.cls(matrix,'active');
+      if(!c.instant)fly(input,matrix,inner,650,true);
+      await c.wait(700);c.cls(outArrow,'on');out.classList.remove('z');paintBars(out,matvec(M,INPUT[focus]));
+      await c.wait(1100);matrix.classList.remove('active');c.cls(samples,'on');
+      for(var k=0;k<outputs.length;k++){outputs[k].classList.remove('z');await c.wait(200);}
+      status.textContent='different token vectors → different '+(kind==='query'?'queries':kind+'s');
+    }};
+  }};
+}
+
+// These semantic directions are invented illustrations, not measurements of
+// the tiny model. Several coordinates participate in each possible feature.
+function featureLesson(kind,caption,focus,names,example){
+  return {cap:caption,camera:{level:'feature',kind:kind},build:function(inner){
+    var p=panel('attention · '+kind+' space'),g=h('div',{class:'feature-space'});
+    g.append(h('div',{class:'feature-intro'},wc(focus),h('span',{class:'lbl',text:'possible '+kind+' patterns'})));
+    var map=h('div',{class:'feature-map'}),head=h('div',{class:'feature-columns'}),axes=[],rows=[];
+    head.append(h('span',{class:'lbl',text:'pattern / coordinates'}));
+    for(var d=0;d<4;d++){var axis=h('span',{class:'feature-axis',text:String(d+1)});head.append(axis);axes.push(axis);}
+    map.append(head);
+    var directions=[[.85,.55,0,.7],[.4,0,.9,.6],[0,.8,.65,.45]];
+    names.forEach(function(name,k){
+      var row=h('div',{class:'feature-row'},h('span',{class:'feature-name',text:name}));
+      directions[k].forEach(function(a){row.append(h('i',{class:'feature-cell'+(a?' used':''),style:'--a:'+a,'aria-hidden':'true'}));});
+      map.append(row);rows.push(row);
+    });
+    var result=h('div',{class:'feature-example'});
+    example.forEach(function(part,k){result.append(h(k===1?'small':'span',{text:part}));});
+    g.append(map,h('p',{class:'feature-note',text:'A space is the set of possible vectors: each number is a coordinate along a dimension. These patterns can span several coordinates; individual numbers have no fixed labels.'}),result);
+    p.append(g);inner.append(p);
+    return {play:async function(c){
+      await c.wait(300);
+      for(var k=0;k<rows.length;k++){
+        rows.forEach(function(row){row.classList.remove('current');});
+        axes.forEach(function(axis,d){axis.classList.toggle('on',directions[k][d]>0);});
+        c.cls(rows[k],'on');c.cls(rows[k],'current');await c.wait(1050);
+      }
+      rows.forEach(function(row){row.classList.remove('current');});axes.forEach(function(axis){axis.classList.remove('on');});
+      c.cls(result,'on');
+    }};
+  }};
+}
+
+/* ---------- stations ---------- */
+var STEPS=[
+{cap:'The model reads the prompt as a list of tokens, numbered by position from a start marker at 0. Its whole job is to identify one of the most likely tokens to continue the sequence.',
+ build:function(inner){
+   var wrap=h('div',{class:'t1'}),line=h('div',{class:'pline'},h('span',{class:'pr',text:'>'})),spans=[];
+   for(var k=1;k<N;k++){
+     var chars=SHOW[k].split('').map(function(ch){return h('span',{class:'ch',text:ch});});
+     if(k<N-1)chars.push(h('span',{class:'ch',text:' '}));
+     var s=h('span',{class:'pw'},chars);line.append(s);spans.push(s);
+   }
+   line.append(h('span',{class:'cursor'}));
+   var stack=h('div',{class:'stack'});
+   var targets=SHOW.map(function(w,k){var r=h('div',{class:'trow'+(k===0?' st':'')+(k===WAS?' me':''),'data-c':String(k)},h('span',{class:'pn',text:String(k)}),h('span',{class:'tw',text:w}));stack.append(r);return r.lastChild;});
+   stack.append(h('div',{class:'trow nx'},h('span',{class:'pn',text:'10'}),h('span',{class:'tw',text:'?'})));
+   wrap.append(line,stack);inner.append(wrap);
+   return {play:async function(c){
+     await c.wait(300);
+     for(var a=0;a<spans.length;a++){var chs=spans[a].children;for(var b=0;b<chs.length;b++){chs[b].classList.add('v');await c.wait(34);}}
+     await c.wait(700);
+     if(!c.instant){
+       line.querySelector('.cursor').style.visibility='hidden';
+       targets.forEach(function(t){t.parentNode.style.visibility='hidden';});
+       stack.style.opacity='1';targets[0].parentNode.style.visibility='';
+       for(var k=1;k<N;k++){
+         fly(spans[k-1],targets[k],wrap,720,false,(function(target){return function(){target.parentNode.style.visibility='';};})(targets[k]));
+         spans[k-1].style.visibility='hidden';await c.wait(55);
+       }
+       await c.wait(720);
+     }
+     c.cls(wrap,'b');
+   }};
+ }},
+
+{cap:'To perform math on language, we have to map words to numbers. Each possible token that we can pass in has an input dedicated to it which is connected to a vector in the embedding table. In this case, the vector is 8-dimensional. Before training, each vector is random, but training distinguishes them over time.',
+ build:function(inner){
+   var g=h('div',{class:'t2'});
+   g.append(h('span',{class:'lbl',text:'tokens'}),h('span',{class:'lbl',text:'vocabulary'}),h('span',{class:'lbl',text:'embeddings'}));
+   var wcol=h('div'),wr=[],k;
+   for(k=0;k<N;k++){var r=h('div',{class:'row'},wc(k));wcol.append(r);wr.push(r);}
+   var tbl=h('div',{class:'tbl'});E.forEach(function(rw){rw.forEach(function(x){tbl.append(h('i',{style:'--a:'+A(x)}));});});
+   var vcol=h('div'),vg=[];
+   for(k=0;k<N;k++){var b=bars(E[IDS[k]],'z'+(k===WAS?' acc':''));vcol.append(h('div',{class:'row'},b));vg.push(b);}
+   g.append(wcol,tbl,vcol);inner.append(g);
+   var svg=overlay(g);
+   function cellsOf(r){return Array.prototype.slice.call(tbl.children,r*8,r*8+8);}
+   function link(k,acc){
+     var a=rel(wr[k].querySelector('.tw'),g),cs=cellsOf(IDS[k]),t0=rel(cs[0],g),t7=rel(cs[7],g),v=rel(vg[k],g);
+     return [path(svg,curve(a.x+a.w+4,a.cy,t0.x-5,t0.cy),acc?'acc':''),path(svg,curve(t7.x+t7.w+5,t7.cy,v.x-6,v.cy),acc?'acc':'')];
+   }
+   return {play:async function(c){
+     await c.wait(250);
+     var L=link(WAS,true);c.draw(L[0]);await c.wait(500);
+     cellsOf(13).forEach(function(x){x.classList.add('hl');});await c.wait(300);
+     c.draw(L[1]);await c.wait(450);vg[WAS].classList.remove('z');await c.wait(900);
+     for(var k=0;k<N;k++){if(k===WAS)continue;var l=link(k,false);c.draw(l[0]);c.draw(l[1]);cellsOf(IDS[k]).forEach(function(x){x.classList.add('fl');});vg[k].classList.remove('z');await c.wait(110);}
+     await c.wait(500);c.cls(g,'done');
+   }};
+ }},
+
+{cap:'The embedding dimensions are not defined by us in any way. Nevertheless, over time, training moves embeddings in such a way that similar words occupy similar positions in the embedding space.',
+ build:function(inner){
+   var PTS=[['she',.12,.36,'p'],['he',.22,.45,'p'],['it',.12,.54,'p'],['water',.22,.1,'l'],['milk',.36,.16,'l'],['glass',.24,.84,'c'],['cup',.38,.9,'c'],['poured',.7,.12,'a'],['spilled',.86,.22,'a'],['full',.6,.64,'s'],['empty',.74,.72,'s'],['half',.58,.8,'s'],['the',.46,.4,'f'],['was',.88,.4,'w']];
+   var HL={p:'pronouns',l:'liquids',c:'containers',a:'actions',s:'states'};
+   var g=h('div',{class:'t2b'}),src=bars(E[13],'acc'),left=h('div',{class:'srcw'},h('span',{class:'lbl',text:'was'}),src),plot=h('div',{class:'plot'});
+   g.append(left,plot);inner.append(g,h('p',{class:'lbl foot',text:'A space is the set of possible vectors, with one coordinate per dimension. This layout is illustrative, not a measured projection.'}));
+   var W=plot.clientWidth,H=plot.clientHeight,pad=14;
+   function px(x){return pad+x*(W-2*pad);}
+   function py(y){return 18+y*(H-52);}
+   function t(x,y,s,cls,anchor){var e=sv('text',{x:f(x),y:f(y),class:cls||'','text-anchor':anchor||'start'});e.textContent=s;return e;}
+   var svg=sv('svg',{class:'sp',width:f(W),height:f(H),viewBox:'0 0 '+f(W)+' '+f(H),'aria-hidden':'true'}),ay=H-18;
+   svg.append(sv('line',{class:'ax',x1:0,y1:f(ay),x2:f(W),y2:f(ay)}),t(0,ay+14,'','axl'),t(W,ay+14,'','axl','end'));
+   var hg=sv('g',{class:'halos'});svg.append(hg);
+   Object.keys(HL).forEach(function(key){
+     var ps=PTS.filter(function(p){return p[3]===key;}),xs=ps.map(function(p){return px(p[1]);}),ys=ps.map(function(p){return py(p[2]);});
+     var x0=Math.min.apply(null,xs),x1=Math.max.apply(null,xs),y0=Math.min.apply(null,ys),y1=Math.max.apply(null,ys);
+     var cx=(x0+x1)/2,cy=(y0+y1)/2,rx=(x1-x0)/2+36,ry=(y1-y0)/2+16;
+     hg.append(sv('ellipse',{class:'halo',cx:f(cx),cy:f(cy),rx:f(rx),ry:f(ry)}),t(cx,cy-ry-4,HL[key],'hl','middle'));
+   });
+   var wasPt=null;
+   PTS.forEach(function(p,n){
+     var x=px(p[1]),y=py(p[2]),right=p[1]>0.8,gp=sv('g',{class:'pt '+p[3],style:'--k:'+n});
+     gp.append(sv('circle',{cx:f(x),cy:f(y),r:p[3]==='w'?5:3.5}),t(right?x-8:x+8,y+4,p[0],'',right?'end':'start'));
+     svg.append(gp);if(p[3]==='w')wasPt=gp.firstChild;
+   });
+   plot.append(svg);
+   return {play:async function(c){
+     await c.wait(300);
+     if(!c.instant){fly(src,wasPt,inner,800,true);await c.wait(750);}
+     c.cls(svg,'p1');await c.wait(500);c.cls(svg,'p2');await c.wait(1400);c.cls(svg,'p3');
+   }};
+ }},
+
+{cap:'Training can also produce similar offsets between related pairs of words. The vector from “man” to “woman” can point in roughly the same direction, with a similar length, as “king” to “queen” or “lion” to “lioness”.',
+ build:function(inner){
+   var W=inner.clientWidth,H=280,svg=sv('svg',{class:'offsets',viewBox:'0 0 '+W+' '+H,height:H,'aria-hidden':'true'}),pairs=[];
+   function label(x,y,word,anchor){var t=sv('text',{x:f(x),y:f(y),'text-anchor':anchor});t.textContent=word;return t;}
+   [['man','woman',.07,176],['king','queen',.39,226],['lion','lioness',.7,162]].forEach(function(pair,k){
+     var x=pair[2]*W,y=pair[3],dx=W*(k===1?.21:.20),dy=k===2?-69:-72,ex=x+dx,ey=y+dy;
+     svg.append(sv('circle',{cx:f(x),cy:y,r:3.5}),label(x,y+22,pair[0],'middle'));
+     var line=path(svg,'M'+f(x)+' '+y+' L'+f(ex)+' '+f(ey),'acc'),a=Math.atan2(dy,dx),tip=6;
+     var end=sv('g',{class:'end'},sv('circle',{cx:f(ex),cy:f(ey),r:3.5}),label(ex,ey-14,pair[1],'middle'),sv('path',{class:'tip',d:'M'+f(ex-tip*Math.cos(a-.5))+' '+f(ey-tip*Math.sin(a-.5))+' L'+f(ex)+' '+f(ey)+' L'+f(ex-tip*Math.cos(a+.5))+' '+f(ey-tip*Math.sin(a+.5))}));
+     svg.append(end);pairs.push([line,end]);
+   });
+   var eq=h('p',{class:'lbl foot offset-eq'},h('span',{text:'woman − man'}),h('span',{text:'≈ queen − king'}),h('span',{text:'≈ lioness − lion'}));
+   inner.append(svg,eq,h('p',{class:'lbl foot',text:'illustrative offsets · approximate relationships'}));
+   return {play:async function(c){
+     await c.wait(250);
+     for(var k=0;k<pairs.length;k++){c.draw(pairs[k][0]);await c.wait(550);c.cls(pairs[k][1],'on');await c.wait(350);}
+     c.cls(eq,'on');
+   }};
+ }},
+
+{cap:'The token embeddings now enter their first attention block. Attention mixes information between tokens. It builds a context-dependent update for each token vector. Adding that update leaves one enriched vector per token. All known prompt tokens can be processed together. We’ll follow one head, whose matrices were learned during the model’s initial training.',camera:{level:'outside'},
+ build:function(inner){
+   var p=panel('attention'),g=h('div',{class:'attention-overview'}),ins=[],outs=[];
+   g.append(h('span',{class:'lbl',text:'input'}),h('span'),h('span',{class:'lbl',text:'output'}));
+   for(var k=0;k<N;k++){
+     var input=bars(E[IDS[k]]),output=bars(E[IDS[k]],k===IT?'acc':'dim');
+     var left=h('div',{class:'overview-row',style:'grid-column:1;grid-row:'+(k+2)},wc(k),input);
+     var right=h('div',{class:'overview-out',style:'grid-column:3;grid-row:'+(k+2)},output);
+     g.append(left,right);ins.push(input);outs.push(output);
+   }
+   var block=h('div',{class:'attention-block',style:'grid-column:2;grid-row:2 / '+(N+2)},h('span',{class:'lbl',text:'attention'}));
+   g.append(block);p.append(g,h('p',{class:'lbl foot',text:'same tokens · context added to each vector'}));inner.append(p);
+   var svg=overlay(g),lines=[];
+   for(var k=0;k<N;k++){
+     var source=k===IT?GLASS:k,a=rel(ins[source],g),b=rel(outs[k],g);
+     lines.push(path(svg,curve(a.x+a.w+3,a.cy,b.x-3,b.cy),k===IT?'acc':''));
+   }
+   return {play:async function(c){
+     await c.wait(350);lines.forEach(function(line){c.draw(line);});await c.wait(900);
+     outs.forEach(function(out,k){paintBars(out,SINGLEROWS[k]);out.classList.remove('dim');});
+     c.cls(block,'on');
+   }};
+ }},
+
+matrixLesson('query','In an attention block, a query is a learned pattern describing which features would be useful to a token. The query matrix produces it from that token’s current representation. Comparing the query with the keys determines how much information to take from each token. Here, the query from “it” matches the key from “glass”.',WQ,IT,[IT,GLASS,WAS]),
+
+featureLesson('query','Query and key coordinates work together. For “it”, imagine a query favoring keys for a singular, non-human referent. Other queries might seek a verb’s subject or a repeated name. These are soft preferences: “water” could match too. Here, “it” and “glass” share a referent, not a grammatical role.',IT,['find a referent','prefer singular','prefer non-human'],['glass','or','water']),
+
+matrixLesson('key','A key is a vector of features that other tokens’ queries can match against. The key matrix extracts those features from each token’s current representation. In our example, “glass” produces a key that a query from “it” can match. Every token gets its own key, using the same matrix.',WK,GLASS,[GLASS,3,IT]),
+
+featureLesson('key','Key space could distinguish a singular entity, a person, a place, or a container. A feature may span several coordinates, and one coordinate may participate in several features. In later layers, once token vectors contain context, keys could also reflect grammatical roles such as subject or object.',GLASS,['singular entity','physical object','container'],['glass','could be referred to by','it']),
+
+matrixLesson('value','The value is the information a token can contribute. Its matrix extracts this information separately from the key, so matching features and contributed information can differ. The query–key match decides how much of the value to use. Here, part of the value from “glass” will be mixed into “it”.',WV,GLASS,[GLASS,3,IT]),
+
+featureLesson('value','Value space holds information worth passing onward. For “glass”, imagine patterns for a container, holding liquid, or having capacity. A share of that information can enter the vector for “it”, helping later layers reason about what it refers to. Elsewhere, useful values might carry a name, grammatical number, or an action.',GLASS,['container','can hold liquid','has capacity'],['glass','→ container information →','it']),
+
+{cap:'These three projections sit inside the same attention head. Every input token produces a query, a key and a value in parallel. Queries and keys determine the attention shares; values supply the information to mix.',camera:{level:'overview'},
+ build:function(inner){
+   var map=h('div',{class:'attention-map','aria-label':'One attention head containing query, key and value projections'});inner.append(map);
+   var world=attentionWorld(map,inner.getBoundingClientRect().width),pose=fitWorld(world,{x:0,y:0,w:map.clientWidth,h:map.clientHeight});
+   world.el.style.transform=cameraTransform(pose);worldOverview(world,true);
+   return {play:async function(c){await c.wait(150);}};
+ }},
+
+{cap:'“It” compares its query with each visible key by multiplying and summing matching coordinates. We divide by √4 because this head has four coordinates. Scaling by the square root of the width keeps scores from growing simply because vectors are wider, which would make softmax too sharply peaked. Softmax turns the scores into shares totaling 100%.',
+ build:function(inner){
+   var p=panel('attention · where “it” looks'),g=h('div',{class:'t4'}),rows=[],keyBars=[],percentages=[];
+   for(var j=0;j<N;j++){
+     var hid=j>IT,kb=bars(RAWK[j]),pc=h('span',{class:'pc',text:hid?'hidden':S1[IT][j].toFixed(2)});
+     var r=h('div',{class:'krow'+(j===GLASS?' gl':'')+(hid?' hid':''),style:'grid-row:'+(j+1)},wc(j),kb,pc);
+     g.append(r);rows.push(r);keyBars.push(kb);percentages.push(pc);
+   }
+   var query=bars(RAWQ[IT],'acc'),qb=h('div',{class:'qcol',style:'grid-row:'+(IT+1)},query,h('span',{class:'tw',text:'it'}));
+   g.append(qb);
+   var terms=h('div',{class:'dot-terms'}),products=[];
+   for(var d=0;d<4;d++){
+     var term=h('span',{class:'dot-term'},h('span',{text:Q[IT][d].toFixed(1)+' × '+K[GLASS][d].toFixed(1)}),h('b',{text:(Q[IT][d]*K[GLASS][d]).toFixed(2)}));
+     terms.append(term);products.push(term);
+   }
+   var note=h('p',{class:'math-note',text:'position rotates query/key pairs before matching'});
+   p.append(g,h('div',{class:'dot-example'},h('span',{class:'lbl',text:'query for “it” × key for “glass”'}),terms,note));inner.append(p);
+   var svg=overlay(g),q=rel(query,g),mx=Math.max.apply(null,WIT),paths=[];
+   for(j=0;j<=IT;j++){var a=rel(rows[j],g);paths.push(path(svg,curve(a.x+a.w+6,a.cy,q.x-8,q.cy),j===GLASS?'acc':''));}
+   return {play:async function(c){
+     await c.wait(250);paintBars(query,Q[IT]);keyBars.forEach(function(b,k){paintBars(b,K[k]);});await c.wait(1200);
+     note.textContent='multiply matching coordinates';c.draw(paths[GLASS]);await c.wait(550);
+     for(var d=0;d<4;d++){
+       keyBars[GLASS].children[d].style.background='var(--acc)';c.cls(products[d],'on');await c.wait(420);
+     }
+     note.textContent='sum '+dot(Q[IT],K[GLASS]).toFixed(2)+' ÷ √4 = score '+S1[IT][GLASS].toFixed(2);await c.wait(1300);
+     paths.forEach(function(pt,j){pt.style.transitionDelay=(j*55)+'ms';c.draw(pt);});
+     c.cls(g,'scores');await c.wait(1100);
+     note.textContent='softmax: exp(score) ÷ sum of exp(scores)';await c.wait(1300);
+     percentages.forEach(function(pc,j){if(j<=IT)pc.textContent=pct(WIT[j]);});
+     paths.forEach(function(pt,j){pt.style.transitionDelay='0ms';var w=WIT[j];pt.style.strokeWidth=(0.6+w*9).toFixed(2);pt.style.opacity=(0.14+0.86*w/mx).toFixed(2);});
+     c.cls(g,'w');
+     var total=S1[IT].reduce(function(s,x){return s+Math.exp(x);},0);
+     note.textContent='glass: '+Math.exp(S1[IT][GLASS]).toFixed(2)+' ÷ '+total.toFixed(2)+' ≈ '+pct(WIT[GLASS]);
+   }};
+ }},
+
+{cap:'Multiply each value by its share and add coordinate by coordinate, giving a four-number mixture for “it”. The learned output matrix computes eight different weighted sums of those four numbers. Each sum becomes one number in an eight-number update, matching the original token vector’s size. Add the update to that vector: “it” now carries information from its context.',
+ build:function(inner){
+   var p=panel('attention · updating “it”'),g=h('div',{class:'t5'}),left=h('div'),vs=[];
+   for(var j=0;j<=IT;j++){
+     var b=bars(V[j],j===GLASS?'acc':'');
+     left.append(h('div',{class:'mrow'+(j===GLASS?' gl':'')},wc(j),b,h('span',{class:'pc',text:pct(WIT[j])})));vs.push(b);
+   }
+   var h1=bars([0,0,0,0],'z acc'),up=bars(SINGLEUPDATES[IT],'z'),ri=bars(ROWIT,'z'),nr=bars(SINGLEROWS[IT],'z acc');
+   var r1=h('div',{class:'eqr'},item(h1,'one mixture'));
+   var r2=h('div',{class:'eqr'},h('span',{class:'op',text:'output matrix ↓'}));
+   var r3=h('div',{class:'eqr'},item(up,'context update'));
+   var r4=h('div',{class:'eqr'},h('span',{class:'op',text:'+'}),item(ri,'original “it”'));
+   var r5=h('div',{class:'eqr'},h('span',{class:'op',text:'='}),item(nr,'updated “it”'));
+   var note=h('p',{class:'math-note',text:'multiply each value by its share'});
+   g.append(left,h('div',{class:'eqcol'},r1,r2,r3,r4,r5));p.append(g,note);inner.append(p);
+   return {play:async function(c){
+     c.cls(r1,'on');await c.wait(350);
+     vs.forEach(function(v,j){paintBars(v,V[j].map(function(x){return x*WIT[j];}));});
+     note.textContent='glass, first coordinate: '+V[GLASS][0].toFixed(2)+' × '+pct(WIT[GLASS])+' ≈ '+(V[GLASS][0]*WIT[GLASS]).toFixed(2);
+     await c.wait(1500);h1.classList.remove('z');
+     if(!c.instant){
+       var sum=[0,0,0,0];
+       for(var j=0;j<=IT;j++){
+         (function(k){fly(vs[k],h1,inner,650,true,function(){sum=sum.map(function(x,d){return x+V[k][d]*WIT[k];});paintBars(h1,sum);});})(j);
+         await c.wait(160);
+       }
+       await c.wait(750);
+     }
+     paintBars(h1,BLEND);note.textContent='each of the four coordinates is a weighted sum';await c.wait(950);
+     c.cls(r2,'on');await c.wait(650);
+     c.cls(r3,'on');up.classList.remove('z');note.textContent='4 numbers → learned projection → 8 numbers';await c.wait(850);
+     c.cls(r4,'on');ri.classList.remove('z');await c.wait(600);
+     c.cls(r5,'on');nr.classList.remove('z');note.textContent='token vector + context update';
+   }};
+ }},
+
+{cap:'That calculation runs for every token. Each token has its own query, so each gets different weights and a different mixture. The diagonal boundary hides later tokens: a token can use only itself and what came before. All prompt tokens can be processed in parallel.',
+ build:function(inner){
+   var p=panel('attention · one head, every position'),g=h('div',{class:'attn-grid'}),keys=h('div',{class:'attn-keys'}),rows=[],values=[];
+   for(var k=0;k<N;k++)keys.append(h('span',null,h('span',{text:String(k)}),bars(K[k])));
+   g.append(h('div',{class:'attn-head'},h('span',{class:'lbl'},'keys →',h('br'),'query ↓'),keys,h('span',{class:'lbl',text:'mix'})));
+   for(var k=0;k<N;k++){
+     var strip=h('div',{class:'weight-strip'}),out=bars(MIXES[k],'z acc');
+     for(var j=0;j<N;j++)strip.append(h('span',{class:'weight-cell'+(j>k?' future':''),style:'--s:'+(j<=k?(1/(1+Math.exp(-S1[k][j]))).toFixed(3):0)+';--w:'+(j<=k?WEIGHTS[k][j].toFixed(4):0),'aria-label':j>k?'position '+j+': masked':'position '+j+': '+pct(WEIGHTS[k][j])}));
+     var row=h('div',{class:'attn-row'},wc(k),strip,out);g.append(row);rows.push([row,out]);
+   }
+   var valueStrip=h('div',{class:'value-strip'});
+   for(var k=0;k<N;k++){var v=bars(V[k]);valueStrip.append(v);values.push(v);}
+   g.append(h('div',{class:'attn-values'},h('span',{class:'lbl',text:'values'}),valueStrip,h('span')));
+   var phases=[h('span',{text:'q · k / √4'}),h('span',{text:'softmax'}),h('span',{text:'Σ weight × value'})];
+   p.append(g,h('div',{class:'attn-formula'},phases[0],h('span',{text:'→'}),phases[1],h('span',{text:'→'}),phases[2]),h('p',{class:'lbl foot',text:'shown one row at a time · computed in parallel'}));inner.append(p);
+   function phase(n){phases.forEach(function(el,k){el.classList.toggle('active',n===k);});}
+   return {play:async function(c){
+     await c.wait(250);
+     for(var k=0;k<N;k++){
+       rows.forEach(function(r){r[0].classList.remove('focus');});
+       c.cls(rows[k][0],'focus');phase(0);c.cls(rows[k][0],'scores');await c.wait(350);
+       phase(1);c.cls(rows[k][0],'weights');await c.wait(350);
+       phase(2);values.forEach(function(v,j){v.style.opacity=j<=k?(0.2+0.8*WEIGHTS[k][j]/Math.max.apply(null,WEIGHTS[k])).toFixed(3):'.08';});
+       rows[k][1].classList.remove('z');await c.wait(550);
+     }
+     rows.forEach(function(r){r[0].classList.remove('focus');});phase(-1);
+     values.forEach(function(v){v.style.opacity='1';});
+   }};
+ }},
+
+{cap:'A head is one set of key, query and value projections and the attention calculation that follows. Heads read the same token vectors, but learn their own weights, so they can find different relationships. They run in parallel. Their mixtures are joined and projected into one update, which is added to the input token vector.',
+ build:function(inner){
+   var p=panel('attention · multiple heads'),g=h('div',{class:'heads'}),table=h('div',{class:'heads-table'}),weights=[WIT,W2it],matrices=[[WQ,WK,WV],[WQ2,WK2,WV2]],fills=[];
+   g.append(h('div',{class:'heads-input'},wc(IT),bars(INPUT[IT]),h('span',{class:'lbl',text:'same input'})));
+   table.append(h('span',{class:'lbl',text:'source'}));
+   matrices.forEach(function(head,n){
+     var icons=h('div',{class:'head-matrices'});
+     head.forEach(function(M,k){var icon=h('span',{class:'mini-matrix'});M.forEach(function(row){row.forEach(function(w){icon.append(h('i',{style:'--a:'+A(w)}));});});icons.append(item(icon,['Wq','Wk','Wv'][k]));});
+     table.append(h('div',{class:'head-heading'},h('span',{class:'lbl',text:'head '+(n+1)}),icons));
+   });
+   [GLASS,7,IT,-1].forEach(function(k){
+     table.append(h('span',{class:'head-word',text:k<0?'others':SHOW[k]}));
+     weights.forEach(function(w){var share=k<0?w.reduce(function(s,x,j){return s+([GLASS,7,IT].indexOf(j)<0?x:0);},0):w[k],fill=h('i',{class:'head-fill'});table.append(h('span',{class:'head-weight'},h('span',{class:'head-track'},fill),h('span',{class:'pc',text:pct(share)})));fills.push([fill,share]);});
+   });
+   var h1=bars(BLEND,'z acc'),h2=bars(HEAD2,'z acc');
+   table.append(h('span',{class:'lbl',text:'mixture'}),item(h1,'4 numbers'),item(h2,'4 numbers'));
+   var note=h('p',{class:'math-note',text:'each head has its own learned matrices'});
+   var result=h('div',{class:'eqr heads-result'},item(bars(ROWIT),'input vector'),h('span',{class:'op',text:'+'}),item(bars(UPD,'z'),'update'),h('span',{class:'op',text:'='}),item(bars(NEWROW,'z acc'),'new vector'));
+   g.append(table,note,result);p.append(g);inner.append(p);
+   return {play:async function(c){
+     await c.wait(400);fills.forEach(function(x){x[0].style.width=(x[1]*100).toFixed(2)+'%';});
+     await c.wait(1200);note.textContent='head 1 favors “glass”; head 2 favors “until”';
+     h1.classList.remove('z');h2.classList.remove('z');await c.wait(1700);
+     note.textContent='join 4 + 4 numbers → output projection → one update';
+     c.cls(result,'on');await c.wait(500);result.querySelectorAll('.vg').forEach(function(b){b.classList.remove('z');});
+   }};
+ }},
+
+{cap:'After attention combines the values and adds its update, a feed-forward neural network recognizes patterns in the information it has gathered. The same network processes every token’s vector. Expansion gives it room to detect many combinations of features; a gate controls their contributions. Contraction combines the results into an eight-number update for each token.',ffview:'detail',
+ build:function(inner){
+   var p=panel('feed-forward · one of 10 tokens'),g=h('div',{class:'t6'}),svg=ffNetwork();
+   var note=h('p',{class:'math-note',text:'8 input numbers → 16 internal features → 8 update numbers'});
+   var example=h('div',{class:'ff-example'},h('div',{class:'ff-signals'},h('span',{text:'liquid'}),h('span',{text:'container'}),h('span',{text:'poured into'})),h('div',{class:'ff-concept',text:'↓ a container being filled'}));
+   g.append(svg,note,example,h('p',{class:'ff-foot',text:'Illustrative pattern · learned features span multiple coordinates.'}));p.append(g);inner.append(p);
+   return {play:async function(c){
+     await c.wait(300);c.cls(svg,'p1');await c.wait(900);c.cls(svg,'p2');
+     svg.querySelectorAll('.ff-hidden').forEach(function(n,k){n.setAttribute('style','--a:'+Math.tanh(Math.abs(PROD[k])).toFixed(2));});
+     note.textContent='combinations respond differently · the gate modulates each contribution';
+     await c.wait(800);c.cls(example,'on');await c.wait(1100);c.cls(svg,'p3');
+     await c.wait(900);note.textContent='the output is an update · the entering vector is preserved';
+   }};
+ }},
+
+{cap:'Every token gets an update of the same size as its input. We add the two number by number—not as extra dimensions. The next transformer block receives 10 updated token vectors, still 8 numbers each. Its attention can now draw on the patterns recognized in this layer.',ffview:'overview',
+ build:function(inner){
+   var svg=sv('svg',{class:'ff-map',viewBox:'0 0 360 460',role:'img','aria-label':'Layer 1: attention, then the same feed-forward network for all ten token rows. Preserved inputs plus updates equal ten eight-dimensional vectors, passed to layer 2 attention.'});
+   function label(x,y,text,cls){var t=sv('text',{x:x,y:y,'text-anchor':'middle',class:cls||''});t.textContent=text;svg.append(t);return t;}
+   function box(x,y,w,ht){svg.append(sv('rect',{x:x,y:y,width:w,height:ht,rx:9,class:'ff-border'}));}
+   var defs=sv('defs'),arrow=sv('marker',{id:'ff-arrow',viewBox:'0 0 6 6',refX:5,refY:3,markerWidth:5,markerHeight:5,orient:'auto'});arrow.append(sv('path',{d:'M0 0 L6 3 L0 6',fill:'none',stroke:'var(--muted)'}));defs.append(arrow);svg.append(defs);
+   function wire(d){svg.append(sv('path',{d:d,class:'ff-wire','marker-end':'url(#ff-arrow)'}));}
+   function matrix(x,y,data,cls){var g=sv('g',{class:'ff-stage '+cls});data.forEach(function(row,k){row.forEach(function(v,d){g.append(sv('rect',{x:x+d*8,y:y+k*8,width:6,height:5,rx:1,fill:k===IT?'var(--acc)':'var(--ink2)',opacity:.2+.75*Math.tanh(Math.abs(v))}));});});svg.append(g);return g;}
+   box(5,5,350,370);label(48,23,'layer 1');
+   box(110,35,140,34);label(180,56,'attention','ff-title');
+   wire('M180 69 V82 H61 V94');wire('M96 137 H146');wire('M61 180 V215');wire('M240 197 V210 H180 V215');
+   var inputs=matrix(30,97,AFTERATTN,'ff-input');label(61,193,'10 × 8');
+   box(151,95,178,99);var net=ffNetwork();net.setAttribute('x',173);net.setAttribute('y',111);net.setAttribute('width',134);net.setAttribute('height',78);net.style.width='134px';net.style.height='78px';net.classList.add('p1','p2','p3');net.querySelectorAll('.ff-hidden').forEach(function(n,k){n.setAttribute('style','--a:'+Math.tanh(Math.abs(PROD[k])).toFixed(2));});svg.append(net);label(240,108,'feed-forward','ff-title');
+   label(61,230,'preserved');label(180,230,'update');label(299,230,'to next layer');
+   var preserved=matrix(30,240,AFTERATTN,'ff-preserved'),updates=matrix(149,240,FFUPDATES,'ff-updates'),result=matrix(268,240,L1OUT,'ff-result');
+   label(120,283,'+','ff-sum');label(239,283,'=','ff-sum');
+   label(61,337,'10 × 8');label(180,337,'10 × 8');label(299,337,'10 × 8');
+   wire('M299 347 V389 H180 V409');label(180,401,'same shape · updated values');
+   box(95,409,170,38);label(180,432,'layer 2 · attention','ff-title');inner.append(svg);
+   return {play:async function(c){
+     c.cls(inputs,'on');c.cls(preserved,'on');c.cls(net,'p1');c.cls(net,'p2');c.cls(net,'p3');
+     await c.wait(700);c.cls(updates,'on');await c.wait(1100);c.cls(result,'on');
+   }};
+ }},
+
+{cap:'Layer 2 reads the rows produced by layer 1 and repeats the operations with new learned weights. Its “was” row can now read “it” after “it” has taken in information from “glass”. Information gathered in one layer can influence the next layer’s matches. The final “was” row will be used to predict the next token.',
+ build:function(inner){
+   var p=panel('layer 2 · same steps, new weights'),g=h('div',{class:'t7'}),rows=[],gl=[],k;
+   for(k=0;k<N;k++){
+     var b=bars(L1OUT[k],'z'+(k===IT?' acc':''));
+     var r=h('div',{class:'lrow'+((k===IT||k===GLASS)?' strong':'')},wc(k),b,k===IT?h('span',{class:'tag',text:'carries glass'}):null,h('span',{class:'pc',text:pct(WL2[k])}));
+     g.append(r);rows.push(r);gl.push(b);
+   }
+   p.append(g);inner.append(p);
+   var svg=overlay(g),me=rel(rows[WAS].querySelector('.pn'),g),mx=0,arcs=[];
+   for(k=0;k<WAS;k++)mx=Math.max(mx,WL2[k]);
+   for(k=0;k<WAS;k++){
+     var t=rel(rows[k].querySelector('.pn'),g),x=me.x-8,bu=10+(WAS-k)*4.8,w=WL2[k];
+     var pt=path(svg,'M'+f(x)+' '+f(me.cy)+' C'+f(x-bu)+' '+f(me.cy)+' '+f(x-bu)+' '+f(t.cy)+' '+f(x)+' '+f(t.cy),'arc');
+     pt.style.strokeWidth=(0.8+w*10).toFixed(1);pt.style.opacity=(0.18+0.82*w/mx).toFixed(2);arcs.push(pt);
+   }
+   return {play:async function(c){
+     await c.wait(200);
+     for(var k=0;k<N;k++){gl[k].classList.remove('z');await c.wait(45);}
+     c.cls(g,'p1');await c.wait(1100);
+     arcs.forEach(function(a,n){a.style.transitionDelay=((WAS-n)*60)+'ms';c.draw(a);});c.cls(g,'p2');
+   }};
+ }},
+
+{cap:'After the last layer, the vector for “was” contains information from the prompt. A learned projection gives every vocabulary token a score for coming next. Softmax turns those scores into probabilities. Lower temperature favors the strongest candidates; higher temperature spreads probability more evenly. Drawing from this distribution selects the next token.',
+ build:function(inner){
+   var p=panel('output'),top=ORDER.slice(0,6),g=h('div',{class:'t8'});
+   var head=h('div',{class:'ohead'},h('span',{class:'tw',text:'was'}),bars(L2WAS,'acc'),h('span',{class:'lbl',text:'→ normalize → 27 scores → softmax'}));
+   var list=h('div',{class:'plist'});
+   var pb=top.map(function(k){var b=h('span',{class:'pb'}),v=h('span',{class:'pv'});list.append(h('div',{class:'prow'+(k===FULL?' top':'')},h('span',{class:'w2',text:VOCAB[k]}),h('span',{class:'pt'},b),v));return [b,v];});
+   var ob=h('span',{class:'pb o'}),ov=h('span',{class:'pv'});
+   list.append(h('div',{class:'prow'},h('span',{class:'w2',text:(VOCAB.length-6)+' more'}),h('span',{class:'pt'},ob),ov));
+   var slider=h('input',{type:'range',id:'temp',min:'0',max:'2',step:'0.1',value:String(TEMP)}),tv=h('output',{class:'tv',for:'temp'});
+   var ruler=h('div',{class:'ruler'}),segs=top.map(function(k,n){var s=h('span',{class:'seg',style:'--s:'+n,text:VOCAB[k]});ruler.append(s);return s;});
+   var oseg=h('span',{class:'seg o'});ruler.append(oseg);
+   var mk=h('span',{class:'mk'});mk.hidden=true;ruler.append(mk);
+   var drawLabel=h('span',{text:'Draw a token'}),btn=h('button',{class:'sb',id:'draw',type:'button'},h('span',{class:'draw-spinner','aria-hidden':'true'}),drawLabel),out=h('span',{class:'out','aria-live':'polite'}),drawTask=null;
+   g.append(head,list,h('label',{class:'trow2',for:'temp'},h('span',{class:'lbl',text:'temperature'}),slider,tv),
+     h('div',{class:'rw'},ruler,h('div',{class:'ticks'},h('span',{class:'lbl',text:'0'}),h('span',{class:'lbl',text:'1'}))),h('div',{class:'srow'},btn,out));
+   p.append(g);inner.append(p);
+   function update(reset){
+     if(reset!==false&&drawTask)drawTask.cancel();
+     TEMP=+slider.value;tv.textContent=TEMP.toFixed(1);
+     var P=softmax(LOG,TEMP),rest=1;
+     top.forEach(function(k,n){rest-=P[k];pb[n][0].style.width=(P[k]*100).toFixed(1)+'%';pb[n][1].textContent=pct(P[k]);segs[n].style.flexBasis=(P[k]*100).toFixed(2)+'%';segs[n].classList.toggle('tiny',P[k]<0.08);});
+     rest=Math.max(0,rest);ob.style.width=(rest*100).toFixed(1)+'%';ov.textContent=pct(rest);oseg.style.flexBasis=(rest*100).toFixed(2)+'%';
+     if(reset!==false){mk.hidden=true;out.textContent='';}
+   }
+   slider.addEventListener('input',update);
+   btn.addEventListener('click',async function(){
+     if(drawTask)return;
+     var owner=run,task=createRun(),temperature=TEMP,P=softmax(LOG,temperature),r=Math.random(),acc=0,pick=ORDER[0];
+     for(var n=0;n<ORDER.length;n++){var k=ORDER[n];if(r<acc+P[k]){pick=k;break;}acc+=P[k];}
+     drawTask=task;
+     function finish(){owner.stops.delete(cancelDraw);btn.disabled=false;btn.classList.remove('drawing');btn.removeAttribute('aria-busy');drawLabel.textContent='Draw a token';mk.classList.remove('spinning');if(drawTask===task)drawTask=null;}
+     function cancelDraw(){task.cancel();}
+     owner.stops.add(cancelDraw);
+     btn.disabled=true;btn.classList.add('drawing');btn.setAttribute('aria-busy','true');drawLabel.textContent='Drawing…';out.textContent='';
+     update(false);ruler.classList.remove('pre');mk.hidden=false;mk.classList.add('spinning');mk.style.left='0%';
+     try{
+       if(!RM){
+         var landing=(r*100).toFixed(3)+'%';
+         var animation=mk.animate([{left:'0%',offset:0},{left:'100%',offset:.14},{left:'0%',offset:.28},{left:'100%',offset:.42},{left:'0%',offset:.56},{left:'100%',offset:.70},{left:'0%',offset:.82,easing:'ease-out'},{left:landing,offset:1}],{duration:1600,easing:'linear',fill:'forwards',id:'token-draw-spin'});
+         task.animations.add(animation);
+       }
+       await task.wait(RM?180:1600);
+       if(owner.cancelled)return;
+       CHOSEN=pick;mk.style.left=(r*100).toFixed(3)+'%';
+       task.animations.forEach(function(a){a.cancel();});task.animations.clear();
+       out.textContent=temperature===0?'temperature 0 always takes “'+VOCAB[pick]+'”':'random point '+r.toFixed(2)+' lands on “'+VOCAB[pick]+'”';
+     }catch(error){if(error!==CANCELLED)throw error;}
+     finally{finish();}
+   });
+   update();
+   return {play:async function(c){
+     if(c.instant)return;
+     var all=pb.map(function(x){return x[0];}).concat([ob]);
+     all.forEach(function(b){b.style.transition='none';b.style.width='0';});
+     ruler.classList.add('pre');void ruler.offsetWidth;
+     all.forEach(function(b){b.style.transition='';});
+     await c.wait(350);update(false);ruler.classList.remove('pre');
+   }};
+ }},
+
+{cap:function(){
+   if(CHOSEN===1)return 'The end token was drawn, so generation stops. It needs no further pass through the network. The runtime can now release this request’s cached keys and values, freeing that memory for another request.';
+   return '“'+VOCAB[CHOSEN]+'” is appended to the prompt. Its new query matches the stored keys and uses their values. Append its new key and value to the cache; discard the query after use. Each layer does this with its own cache.';
+ },
+ build:function(inner){
+   var isEnd=CHOSEN===1,w=isEnd?'end':VOCAB[CHOSEN],disp=isEnd?'':(CHOSEN===26?'.':' '+w);
+   var nch=disp.split('').map(function(ch){return h('span',{class:'ch',text:ch===' '?' ':ch});});
+   var line=h('div',{class:'pline sm'},h('span',{class:'pr',text:'>'}),'She poured water into the glass until it was',nch,h('span',{class:'endt',text:'end'}),h('span',{class:'cursor'}));
+   var p=panel(isEnd?'generation stopped':'next pass · position 10'),g=h('div',{class:'t9'});
+   g.append(h('span',{class:'lbl hd',text:'saved keys + values · one head, layer 1'}));
+   for(var k=0;k<N;k++)g.append(wc(k),h('span',{class:'kv',style:'--k:'+k},bars(K[k],'dim'),bars(V[k],'dim')));
+   var nw=wc(10,w);nw.classList.add('nr','me');
+   var nq=[bars(QN,'z acc'),bars(KN,'z acc'),bars(VN,'z acc')];
+   var ng=h('span',{class:'kv nr'},nq.map(function(b,i){return item(b,['q','k','v'][i]);}));ng.style.cssText='border-top:1px dashed var(--line);padding-top:6px;margin-top:6px';
+   if(!isEnd)g.append(nw,ng);p.append(g,h('p',{class:'lbl foot',text:'each layer keeps its own cache · weights stay fixed'}));
+   var pill=h('span',{class:'pill',text:w});
+   var wrap=h('div',{class:'t9w'},line,p,pill);inner.append(wrap);
+   return {play:async function(c){
+     if(isEnd){c.cls(wrap,'e');return;}
+     if(!c.instant){
+       var a=rel(pill,wrap),b=rel(nw.querySelector('.tw'),wrap),dx=b.x-a.x,dy=b.y-a.y;
+       motion(pill,[{opacity:0,transform:'translate(0px,0px)'},{opacity:1,transform:'translate(0px,0px)',offset:.15},{opacity:1,transform:'translate('+f(dx*0.35+40)+'px,'+f(dy*0.55)+'px)',offset:.55},{opacity:0,transform:'translate('+f(dx)+'px,'+f(dy)+'px)'}],{duration:1500,easing:'ease-in-out',fill:'forwards'});
+       await c.wait(1300);
+     }
+     c.cls(g,'n');nq.forEach(function(x){x.classList.remove('z');});
+     for(var n=0;n<nch.length;n++){nch[n].classList.add('v');await c.wait(70);}
+     await c.wait(500);c.cls(g,'r');await c.wait(1500);
+     // Only a sampled end token ends generation. Do not invent punctuation.
+   }};
+ }}
+];
+
+/* Wide views keep token rows visible around the existing close-ups. */
+function wideSvg(label,height){return sv('svg',{class:'wide-svg',viewBox:'0 0 400 '+height,role:'img','aria-label':label});}
+function wt(svg,x,y,text,cls){var t=sv('text',{x:x,y:y,class:cls||'','text-anchor':'middle'});t.textContent=text;svg.append(t);return t;}
+function wr(svg,x,y,w,h,cls){var r=sv('rect',{x:x,y:y,width:w,height:h,rx:5,class:cls||'wide-box'});svg.append(r);return r;}
+function wl(svg,d){var p=sv('path',{d:d,class:'wide-wire'});svg.append(p);return p;}
+function tileMatrix(svg,x,y,rows,cell,accent){var g=sv('g',{class:'tile-matrix'});rows.forEach(function(row,k){row.forEach(function(v,d){g.append(sv('rect',{x:x+d*cell,y:y+k*cell,width:cell-2,height:cell-2,rx:1,fill:accent||k===IT?'var(--acc)':'var(--ink2)',opacity:.18+.8*Math.tanh(Math.abs(v))}));});});svg.append(g);return g;}
+function pipeline(svg,x,y,width){
+ var blocks=[],cw=width/4,rh=41;
+ for(var i=0;i<32;i++){
+  var row=Math.floor(i/4),col=row%2?3-i%4:i%4,bx=x+col*cw,by=y+row*rh,g=sv('g',{class:'pipeline-block'});
+  wr(g,bx+2,by+1,cw-8,34);wt(g,bx+13,by+14,String(i+1),'block-number');
+  wr(g,bx+27,by+7,cw-40,7,'mini-attention');
+  wl(g,'M'+(bx+28)+' '+(by+21)+' L'+(bx+cw/2+9)+' '+(by+17)+' L'+(bx+cw-13)+' '+(by+21)+' L'+(bx+cw/2+9)+' '+(by+28)+' Z');
+  svg.append(g);blocks.push(g);
+  if(i<31){var nc=(i%4===3)?col:(row%2?col-1:col+1),ny=i%4===3?by+rh:by;
+   wl(svg,i%4===3?'M'+(bx+cw/2)+' '+(by+35)+' V'+(ny+1):'M'+(row%2?bx+2:bx+cw-6)+' '+(by+18)+' H'+(x+nc*cw+(row%2?cw-6:2)));}
+ }
+ return blocks;
+}
+var matrixIntro={cap:'The prompt enters as a matrix: one row per token, one column per embedding dimension. Every token looks up its own row in the same embedding table. Ten tokens give us ten eight-number vectors. The context limit bounds how many positions the model can use.',build:function(inner){
+ var p=panel('one prompt · 10 rows × 8 dimensions'),g=h('div',{class:'matrix-intro'}),vectors=[];
+ IDS.forEach(function(id,k){var b=bars(E[id],'z'+(k===IT?' acc':''));g.append(h('div',{class:'matrix-input-row'},wc(k),h('span',{class:'lbl',text:'→'}),b));vectors.push(b);});
+ p.append(g,h('p',{class:'math-note',text:'one shared embedding table · an independent lookup for each token'}));inner.append(p);
+ return {play:async function(c){await c.wait(300);vectors.forEach(function(b){b.classList.remove('z');});}};
+}};
+var allProjections={cap:'All ten rows enter the same attention head. The query matrix is applied to every row; so are the key and value matrices. This produces ten queries, ten keys and ten values. Each query will choose its own mixture of the available values. Position adjusts queries and keys before matching.',build:function(inner){
+ var p=panel('one head · all token rows'),g=h('div',{class:'all-projections'}),outs=[];
+ ['token','query','key','value'].forEach(function(t){g.append(h('span',{class:'lbl',text:t}));});
+ for(var k=0;k<N;k++){g.append(wc(k));[Q,K,V].forEach(function(data){var b=bars(data[k],'z'+(k===IT?' acc':''));g.append(b);outs.push(b);});}
+ p.append(g,h('p',{class:'math-note',text:'same Wq, Wk and Wv at every position · 10 × 4 numbers in each result'}));inner.append(p);
+ return {play:async function(c){await c.wait(400);outs.forEach(function(b){b.classList.remove('z');});}};
+}};
+var headsAndDepth={cap:'More heads examine different relationships in parallel, using the same incoming vectors. More blocks add successive stages: each reads what the previous block produced. An earlier block might connect “broken” to “clock”; a later block can use that enriched representation to distinguish it from a working clock.',build:function(inner){
+ var svg=wideSvg('Heads read the same inputs in parallel. Successive blocks use results produced by earlier blocks.',390);
+ wt(svg,200,18,'more heads · parallel views');wt(svg,200,46,'same incoming token vectors');
+ wl(svg,'M200 54 V66 H72 V77 M200 66 V77 M200 66 H328 V77');
+ var heads=sv('g',{class:'depth-stage'});
+ [72,200,328].forEach(function(x,k){wr(heads,x-48,77,96,32);wt(heads,x,97,'head '+(k+1));});svg.append(heads);
+ wl(svg,'M72 109 V122 H200 V137 M200 109 V137 M328 109 V122 H200');wt(svg,200,151,'combine their results');
+ wl(svg,'M36 174 H364');wt(svg,200,199,'more blocks · build on earlier results');
+ var first=sv('g',{class:'depth-stage'});wr(first,64,215,272,43);wt(first,200,233,'earlier block');wt(first,200,249,'“clock” gathers “broken”');svg.append(first);
+ wl(svg,'M200 258 V296 M196 290 L200 296 L204 290');
+ var later=sv('g',{class:'depth-stage'});wr(later,64,301,272,43);wt(later,200,319,'later block');wt(later,200,335,'matches using that distinction');svg.append(later);
+ wt(svg,200,376,'illustrative pattern · layers have no assigned English roles');inner.append(svg);
+ return {play:async function(c){await c.wait(300);c.cls(heads,'lit');await c.wait(1000);c.cls(first,'lit');await c.wait(1100);c.cls(later,'lit');}};
+}};
+var deepLayers={cap:'A language model repeats this transformer block many times—32 in this illustration. Each block has attention and a feed-forward network, with its own learned weights. All token vectors continue through the stack. Later attention can combine information that earlier blocks have already gathered and interpreted.',build:function(inner){
+ var svg=wideSvg('32 transformer blocks, each containing attention and a feed-forward network',400);
+ wt(svg,200,16,'attention + feed-forward in every block');var blocks=pipeline(svg,12,35,376);wt(svg,200,387,'10 token vectors in → 10 richer token vectors out');inner.append(svg);
+ return {play:async function(c){for(var i=0;i<32;i++){c.cls(blocks[i],'lit');await c.wait(65);}}};
+}};
+var predictionBridge={cap:'So far, we’ve described attention as understanding what tokens refer to and how they relate. Further blocks build on that context to predict what comes next. Keys still offer features to match, queries seek relevant information, and values supply it—but that information increasingly supports a prediction. By the final block, a simple learned projection can score the possible next tokens.',build:function(inner){
+ var svg=wideSvg('Successive transformer blocks produce a prediction-useful final vector, followed by normalization, linear vocabulary scoring, softmax, and token selection.',410),stages=[];
+ [['early','features'],['middle','interpretation'],['late','prediction']].forEach(function(parts,k){var x=67+k*133,g=sv('g',{class:'depth-stage'});wt(g,x,20,parts[0]);wr(g,x-56,32,112,40);wt(g,x,56,parts[1]);svg.append(g);stages.push(g);if(k<2)wl(svg,'M'+(x+57)+' 52 H'+(x+76));});
+ wt(svg,200,94,'the same mechanisms · increasingly useful for prediction');
+ wl(svg,'M333 76 V109 H200 V123');
+ var vector=sv('g',{class:'depth-stage'});wt(vector,200,140,'final token vector · ready for scoring');
+ L2WAS.forEach(function(v,k){vector.append(sv('rect',{x:153+k*12,y:152,width:8,height:6+Math.abs(v)*12,rx:1,fill:'var(--acc)'}));});svg.append(vector);stages.push(vector);
+ var steps=[['final normalization','keep 8 coordinates'],['linear vocabulary projection','8 numbers → 27 scores (logits)'],['softmax → token selection','probabilities → one token']];
+ steps.forEach(function(parts,k){var y=193+k*66,g=sv('g',{class:'depth-stage'});wl(svg,'M200 '+(y-14)+' V'+(y-3)+' M196 '+(y-8)+' L200 '+(y-3)+' L204 '+(y-8));wr(g,69,y,262,48);wt(g,200,y+19,parts[0]);wt(g,200,y+36,parts[1]);svg.append(g);stages.push(g);});
+ wt(svg,200,402,'the stack prepares the information · the projection scores tokens');inner.append(svg);
+ return {play:async function(c){for(var k=0;k<stages.length;k++){c.cls(stages[k],'lit');await c.wait(k<3?450:650);}}};
+}};
+var outputMatrix={cap:'After the last block, we use the final token’s vector—“was”—to predict what comes next. A learned output matrix turns its eight numbers into one score for every vocabulary token. Softmax converts those scores into probabilities that sum to 100%. The next step selects one token from that distribution.',build:function(inner){
+ var p=panel('output · from a vector to vocabulary probabilities'),g=h('div',{class:'output-overview'}),P=softmax(LOG),top=ORDER.slice(0,3),rest=1-top.reduce(function(sum,k){return sum+P[k];},0);
+ var input=h('div',{class:'output-vector'},h('span',{class:'tw',text:'was'}),bars(L2WAS,'acc'),h('span',{class:'lbl',text:'8 numbers'}));
+ var projection=h('div',{class:'output-projection'},h('span',{text:'learned output matrix'}),h('small',{text:'8 numbers → 27 vocabulary scores'}));
+ var table=h('div',{class:'output-table'}),fills=[];
+ ['vocabulary','score','softmax → probability'].forEach(function(t){table.append(h('span',{class:'lbl',text:t}));});
+ top.forEach(function(k){var fill=h('i',{class:'pb',style:'width:0%'});table.append(h('span',{text:VOCAB[k]}),h('span',{class:'output-score',text:LOG[k].toFixed(2)}),h('span',{class:'output-probability'},h('span',{class:'pt'},fill),h('span',{class:'pv',text:pct(P[k])})));fills.push([fill,P[k]]);});
+ var other=h('i',{class:'pb',style:'width:0%'});table.append(h('span',{text:'24 more'}),h('span',{class:'output-score',text:'24 scores'}),h('span',{class:'output-probability'},h('span',{class:'pt'},other),h('span',{class:'pv',text:pct(rest)})));fills.push([other,rest]);
+ var strip=h('div',{class:'output-vocabulary'});VOCAB.forEach(function(token,k){strip.append(h('i',{class:'vocab-prob','aria-label':token+': '+pct(P[k]),style:'height:'+Math.max(2,40*P[k]/Math.max.apply(null,P))+'px'}));});
+ g.append(input,h('span',{class:'output-down',text:'↓'}),projection,h('span',{class:'output-down',text:'↓'}),table,strip,h('p',{class:'ff-foot',text:'all 27 vocabulary entries · total probability 100%'}));p.append(g);inner.append(p);
+ return {play:async function(c){await c.wait(400);c.cls(projection,'on');await c.wait(800);c.cls(table,'on');fills.forEach(function(pair){pair[0].style.width=(pair[1]*100).toFixed(2)+'%';});c.cls(strip,'on');}};
+}};
+var selectedToken={cap:function(){return 'Sampling chooses one token from the probability distribution: “'+VOCAB[CHOSEN]+'”. A one-hot vector would mark just that vocabulary entry with 1 and all others with 0. In practice, we keep its token ID and use that ID to look up its embedding on the next pass.';},build:function(inner){
+ var p=panel('probabilities → one selected token'),g=h('div',{class:'vocab-bars'}),prob=softmax(LOG,TEMP),picked=[];
+ VOCAB.forEach(function(word,k){var b=h('i',{class:'prob-stick','data-token':String(k),style:'height:'+Math.max(1,100*prob[k]/Math.max.apply(null,prob))+'px'}),one=h('i',{class:'one-stick'+(k===CHOSEN?' selected':''),'data-token':String(k)});g.append(h('div',{class:'vocab-column',title:word},b,one));picked.push(one);});
+ var result=h('div',{class:'picked-token',text:'“'+VOCAB[CHOSEN]+'” · token ID '+CHOSEN});
+ p.append(h('p',{class:'math-note',text:'all 27 probabilities'}),g,h('p',{class:'math-note',text:'one-hot selection · one 1, every other entry 0'}),result);inner.append(p);
+ return {play:async function(c){await c.wait(900);picked.forEach(function(b){c.cls(b,'on');});c.cls(result,'on');}};
+}};
+var generationLoop={cap:function(){return CHOSEN===1?'An end token stops the loop. No further token needs to enter the network. Otherwise, each selected token is appended to the sequence, embedded, and used to predict the following token.':'The selected token is appended to the sequence. Its token ID looks up an embedding, then the network predicts what follows it. Repeat: predict, select, append. A whole pass produces one new token—not the rest of the sentence at once. Generation stops at an end token or a runtime limit.';},build:function(inner){
+ var svg=wideSvg('Autoregressive generation: append a token, embed it, pass through all 32 blocks, and select the next token',430);
+ wt(svg,200,16,'prompt → '+(CHOSEN===1?'end':'“'+VOCAB[CHOSEN]+'” → …'));wt(svg,200,38,'token IDs → embedding lookup');var blocks=pipeline(svg,36,52,328);
+ wt(svg,200,400,CHOSEN===1?'stop':'scores → softmax → select one token');wl(svg,'M350 395 H388 V30 H318');wt(svg,376,210,CHOSEN===1?'':'↥');inner.append(svg);
+ return {play:async function(c){if(CHOSEN===1)return;for(var i=0;i<32;i++){c.cls(blocks[i],'lit');await c.wait(50);}}};
+}};
+var cachePurpose={cap:'Without a cache, every prediction reruns the earlier tokens. They cannot see newly appended tokens, so their computations produce the same results again. Caching avoids that repeated work.',build:function(inner){
+ var p=panel('same next-token prediction · less repeated work'),g=h('div',{class:'cache-compare'}),rows=[];
+ ['','without cache','with KV cache'].forEach(function(t){g.append(h('span',{class:'lbl',text:t}));});
+ [10,11,12,13].forEach(function(n,i){g.append(h('span',{class:'lbl',text:i===0?'prompt':'pass '+i}));[false,true].forEach(function(cached){var line=h('div',{class:'work-strip'});for(var k=0;k<n;k++)line.append(h('i',{class:cached&&i>0&&k<n-1?'saved':'compute'}));g.append(line);rows.push(line);});});
+ p.append(g,h('p',{class:'math-note',text:'bright = token processed · dim = stored K/V read\nsame pattern at every layer'}));inner.append(p);
+ return {play:async function(c){for(var i=0;i<rows.length;i+=2){c.cls(rows[i],'on');c.cls(rows[i+1],'on');await c.wait(700);}}};
+}};
+var cacheMemory={cap:'The saved computation costs memory: longer sequences and more active requests need larger caches. Memory can be reserved up front or allocated in blocks as needed, then released when a request finishes. Longer contexts also mean more stored K/V to read for each new token.',build:function(inner){
+ var p=panel('KV cache · memory for reusable results'),svg=wideSvg('Keys and values are stored per layer and grow with the sequence',260),fresh=[];
+ [1,2,16,32].forEach(function(layer,i){wt(svg,42,47+i*52,'layer '+layer);['K','V'].forEach(function(t,j){wt(svg,86,38+i*52+j*17,t);for(var k=0;k<13;k++){var r=wr(svg,102+k*20,28+i*52+j*17,16,10,k<10?'cache-cell':'cache-cell fresh');if(k>=10)fresh.push(r);}});});
+ wt(svg,226,253,'sequence length →');p.append(svg,h('p',{class:'math-note',text:'twice as many tokens → twice the cached vectors'}),h('p',{class:'ff-foot',text:'Four of 32 layers shown · full-context cache.'}));inner.append(p);
+ return {play:async function(c){await c.wait(700);fresh.forEach(function(r){c.cls(r,'on');});}};
+}};
+var titleSlide={cap:'Follow one sentence through embeddings, attention, next-token prediction, and the cache that makes generation faster.',build:function(inner){
+ var title=h('div',{class:'title-slide'},h('span',{class:'title-kicker',text:'a visual walkthrough'}),h('h1',{text:'Inside a Transformer'}),h('p',{text:'How a language model chooses what comes next.'}));inner.append(title);
+ return {play:async function(c){await c.wait(120);c.cls(title,'on');}};
+}};
+var originalSteps=STEPS.slice();
+STEPS=[titleSlide].concat(originalSteps.slice(0,4),[matrixIntro],originalSteps.slice(4,12),[allProjections],originalSteps.slice(12,18),[headsAndDepth,deepLayers,predictionBridge,outputMatrix,originalSteps[19],selectedToken,generationLoop,cachePurpose,originalSteps[20],cacheMemory]);
+
+/* ---------- map, navigation ---------- */
+function ffNetwork(){
+  var svg=sv('svg',{class:'mlp ff-network',viewBox:'0 0 360 210',width:360,height:210,'aria-hidden':'true'});
+  var l1=sv('g',{class:'g l1'}),l2=sv('g',{class:'g l2'}),n0=sv('g',{class:'g n0'}),n1=sv('g',{class:'g n1'}),n2=sv('g',{class:'g n2'}),bd=sv('g',{class:'g bd'});
+  function y(k,n){return 99+(k-(n-1)/2)*(n===8?13:10);}
+  for(var a=0;a<8;a++)for(var b=0;b<16;b++){
+    l1.append(sv('line',{x1:35,y1:y(a,8),x2:180,y2:y(b,16)}));
+    l2.append(sv('line',{x1:180,y1:y(b,16),x2:325,y2:y(a,8)}));
+  }
+  [[n0,X,35],[n1,UP,180],[n2,DOWN,325]].forEach(function(col){col[1].forEach(function(v,k){col[0].append(sv('circle',{cx:col[2],cy:y(k,col[1].length),r:col[1].length===8?4:3.4,class:col[1].length===16?'ff-hidden':'',style:'--a:'+Math.tanh(Math.abs(v)).toFixed(2)}));});});
+  [[n0,35,'8 in'],[n1,180,'16 features'],[n2,325,'8 update'],[bd,180,'gate']].forEach(function(col){var t=sv('text',{x:col[1],y:col[0]===bd?12:204,'text-anchor':'middle'});t.textContent=col[2];col[0].append(t);});
+  svg.append(l1,l2,n0,n1,bd,n2);return svg;
+}
+
+var GROUPS=[{label:'embeddings',steps:[1,2,3,4,5]},{label:'Q · K · V',steps:[6,7,8,9,10,11,12]},{label:'attention',steps:[13,14,15,16,17,18]},{label:'layers',steps:[19,20,21,22,23]},{label:'prediction',steps:[24,25,26,27]},{label:'KV cache',steps:[28,29,30]}];
+var mapEl=document.getElementById('map'),vp=document.getElementById('vp'),capEl=document.getElementById('cap');
+var nextBtn=document.getElementById('next'),backBtn=document.getElementById('back'),replayBtn=document.getElementById('replay');
+var dots=[],grps=[];
+GROUPS.forEach(function(gr){
+  var d=h('div',{class:'dts'});
+  gr.steps.forEach(function(s){var b=h('button',{class:'d',type:'button','aria-label':'Go to step '+s+' of '+(STEPS.length-1)+' ('+gr.label+')'});b.addEventListener('click',function(){go(s,s>idx?'next':(s<idx?'back':'fresh'));});d.append(b);dots[s]=b;});
+  var el=h('div',{class:'grp'},h('span',{text:gr.label}),d);mapEl.append(el);grps.push([el,gr.steps]);
+});
+
+var RM=window.matchMedia&&window.matchMedia('(prefers-reduced-motion: reduce)').matches;
+var idx=0,gen=0,busy=false,cur=null,run=null;
+var CANCELLED={cancelled:true};
+
+// Every transition owns its waits and moving copies. Leaving it settles all
+// pending waits and cancels its animations before the next station is built.
+function createRun(){
+  var task={cancelled:false,stops:new Set(),animations:new Set()};
+  task.wait=function(ms,instant){
+    if(task.cancelled)return Promise.reject(CANCELLED);
+    if(instant)return Promise.resolve();
+    return new Promise(function(resolve,reject){
+      var id=setTimeout(function(){task.stops.delete(stop);resolve();},ms);
+      function stop(){clearTimeout(id);reject(CANCELLED);}
+      task.stops.add(stop);
+    });
+  };
+  task.frame=function(){
+    if(task.cancelled)return Promise.reject(CANCELLED);
+    return new Promise(function(resolve,reject){
+      var id=requestAnimationFrame(function(){task.stops.delete(stop);resolve();});
+      function stop(){cancelAnimationFrame(id);reject(CANCELLED);}
+      task.stops.add(stop);
+    });
+  };
+  task.cancel=function(){
+    task.cancelled=true;
+    task.stops.forEach(function(stop){stop();});task.stops.clear();
+    task.animations.forEach(function(a){a.onfinish=null;a.cancel();});task.animations.clear();
+  };
+  return task;
+}
+function motion(el,keyframes,options){
+  var animation=el.animate(keyframes,options);
+  if(run)run.animations.add(animation);
+  return animation;
+}
+
+function makeCtx(my,instant){
+  var task=run;
+  function check(){if(my!==gen||task.cancelled)throw CANCELLED;}
+  return {instant:instant,
+    wait:function(ms){check();return task.wait(ms,instant);},
+    cls:function(el,c){check();void el.getBoundingClientRect();el.classList.add(c);},
+    draw:function(p){check();void p.getBoundingClientRect();p.classList.add('on');}};
+}
+function setCap(t){
+  if(capEl.dataset.t===t)return;capEl.dataset.t=t;
+  // Commit caption layout before measuring any moving token endpoints.
+  capEl.textContent=t;
+  if(!RM)motion(capEl,[{opacity:0},{opacity:1}],{duration:180});
+}
+function ui(){
+  document.documentElement.classList.toggle('intro-dark',idx===0);
+  var st=STEPS[idx];setCap(typeof st.cap==='function'?st.cap():st.cap);
+  backBtn.disabled=idx===0;
+  nextBtn.firstChild.textContent=idx===0?'Begin':idx===STEPS.length-1?'Start over':'Next';
+  mapEl.style.visibility=idx===0?'hidden':'';backBtn.style.visibility=idx===0?'hidden':'';replayBtn.hidden=idx===0;
+  dots.forEach(function(d,k){d.className='d'+(k<idx?' done':'')+(k===idx?' cur':'');if(k===idx)d.setAttribute('aria-current','step');else d.removeAttribute('aria-current');});
+  grps.forEach(function(g){g[0].classList.toggle('on',g[1].indexOf(idx)>=0);});
+}
+
+/* The same measured coordinate system is used for every attention camera trip.
+   Projection panels occupy sibling locations; feature panels live in vectors. */
+function cameraTransform(p){return 'translate('+p.x.toFixed(3)+'px,'+p.y.toFixed(3)+'px) scale('+p.s.toFixed(6)+')';}
+function fitWorld(world,r){
+  var s=Math.min(r.w/world.w,r.h/world.h)*.94;
+  return {s:s,x:r.x+(r.w-world.w*s)/2,y:r.y+(r.h-world.h*s)/2};
+}
+function coverBlock(r,view){
+  var fx=r.x+r.w/2,fy=r.y+r.h*.23;
+  // Center near the block's top, then grow *all four* edges beyond the viewport.
+  var s=Math.max(view.w/(r.w*.5),view.h/(r.h*.23))*.58;
+  return {s:s,x:view.w/2-fx*s,y:view.h/2-fy*s};
+}
+function attentionWorld(host,width){
+  var el=h('div',{class:'attention-world camera-static','aria-hidden':'true'}),frame=h('div',{class:'attention-frame'}),nodes={},height=0;
+  el.append(frame,h('span',{class:'attention-world-title',text:'attention'}));host.append(el);
+  ['query','key','value'].forEach(function(kind){
+    var step=STEPS.filter(function(s){return s.camera&&s.camera.level==='projection'&&s.camera.kind===kind;})[0];
+    var loc=h('div',{class:'attention-location',style:'width:'+width+'px'});el.append(loc);step.build(loc);
+    var pane=loc.querySelector('.panel');pane.classList.add('attention-snapshot');
+    pane.querySelectorAll('[data-c]').forEach(function(c){c.removeAttribute('data-c');});
+    pane.querySelectorAll('.z').forEach(function(v){v.classList.remove('z');});
+    pane.querySelectorAll('.matrix-arrow').forEach(function(a){a.classList.add('on');});pane.querySelector('.matrix-samples').classList.add('on');
+    var r=pane.getBoundingClientRect(),vector=rel(pane.querySelectorAll('.matrix-end')[1].querySelector('.vg'),pane);
+    height=Math.max(height,r.height);
+    var glyph=h('div',{class:'attention-glyph'},h('span',{class:'attention-glyph-title',text:kind}),h('div',{class:'attention-glyph-vector'},bars(kind==='query'?RAWQ[IT]:(kind==='key'?RAWK[GLASS]:V[GLASS]),'acc')));
+    loc.append(glyph);nodes[kind]={el:loc,pane:pane,glyph:glyph,w:width,h:r.height,vector:vector};
+  });
+  ['query','key','value'].forEach(function(kind,i){var n=nodes[kind];n.x=.55*width;n.y=(.48+1.2*i)*height;n.el.style.left=n.x+'px';n.el.style.top=n.y+'px';n.el.style.height=n.h+'px';});
+  var world={el:el,nodes:nodes,w:width*2.1,h:height*4.06};el.style.width=world.w+'px';el.style.height=world.h+'px';
+  // Keep labels readable in the final wide view; fade these out before zooming.
+  var fit=fitWorld(world,{x:0,y:0,w:width,h:370}).s;
+  frame.style.borderWidth=(1/fit)+'px';
+  var trunk=width*.065,branches=sv('svg',{class:'attention-branches',width:world.w,height:world.h,'aria-hidden':'true'});
+  branches.append(sv('path',{d:'M'+trunk+' '+height*.85+' V'+(nodes.value.y+nodes.value.h/2),'stroke-width':1/fit}));
+  Object.keys(nodes).forEach(function(kind){var n=nodes[kind],y=n.y+n.h/2;branches.append(sv('path',{d:'M'+trunk+' '+y+' H'+n.x,'stroke-width':1/fit}));});
+  var inputLabel=sv('text',{x:trunk,y:height*.73,'font-size':9/fit});inputLabel.textContent='input';branches.append(inputLabel);el.append(branches);
+  el.querySelector('.attention-world-title').style.fontSize=(11/fit)+'px';
+  Object.keys(nodes).forEach(function(kind){var g=nodes[kind].glyph;g.style.borderWidth=(1/fit)+'px';g.style.gap=(7/fit)+'px';g.querySelector('.attention-glyph-title').style.fontSize=(12/fit)+'px';var v=g.querySelector('.attention-glyph-vector');v.style.height=(26/fit)+'px';v.querySelector('.vg').style.transform='scale('+(1/fit)+')';});
+  return world;
+}
+function worldOverview(world,on){
+  Object.keys(world.nodes).forEach(function(kind){var n=world.nodes[kind];n.pane.style.opacity=on?'0':'1';n.glyph.style.opacity=on?'1':'0';});
+}
+function worldPose(world,meta,panelRect,view){
+  if(meta.level==='overview')return fitWorld(world,panelRect);
+  var n=world.nodes[meta.kind],s=panelRect.w/n.w;
+  if(meta.level==='feature'){
+    s*=8;
+    return {s:s,x:panelRect.x+panelRect.w/2-(n.x+n.vector.cx)*s,y:panelRect.y+panelRect.h/2-(n.y+n.vector.cy)*s};
+  }
+  return {s:s,x:panelRect.x-n.x*s,y:panelRect.y-n.y*s};
+}
+function parentPose(world,kind,view,scale){
+  var n=world.nodes[kind],s=scale||1;
+  return {s:s,x:view.w/2-(n.x+n.w/2)*s,y:view.h/2-(n.y+n.h/2)*s};
+}
+function cameraRoute(world,from,to,start,end,view){
+  var points=[{pose:start,at:0}],time=0;
+  function push(p,ms){time+=ms;points.push({pose:p,at:time});}
+  var different=from.kind&&to.kind&&from.kind!==to.kind;
+  if(from.level==='feature'&&(different||to.level==='overview'))push(parentPose(world,from.kind,view),600);
+  if(different){
+    push(parentPose(world,from.kind,view,.56),280);
+    push(parentPose(world,to.kind,view,.56),520);
+    if(to.level==='feature')push(parentPose(world,to.kind,view),320);
+  }
+  if(from.level==='overview'&&to.level==='feature')push(parentPose(world,to.kind,view),700);
+  push(end,to.level==='feature'?720:(to.level==='overview'?850:520));
+  return {duration:time,frames:points.map(function(p){return {transform:cameraTransform(p.pose),offset:p.at/time,easing:'cubic-bezier(.4,0,.2,1)'};})};
+}
+function cameraClone(pane){
+  var clone=pane.cloneNode(true);clone.classList.add('camera-static');clone.querySelectorAll('.ghost').forEach(function(g){g.remove();});
+  // Capture a partly played vector as it is on screen, rather than jumping to
+  // the CSS transition's target when a user advances before playback finishes.
+  var originals=pane.querySelectorAll('.vg'),copies=clone.querySelectorAll('.vg');
+  originals.forEach(function(g,k){Array.prototype.forEach.call(g.children,function(bar,d){var t=window.getComputedStyle(bar).transform;if(t)copies[k].children[d].style.transform=t;});});
+  ['.matrix-samples','.matrix-arrow','.feature-row','.feature-example'].forEach(function(selector){var a=pane.querySelectorAll(selector),b=clone.querySelectorAll(selector);a.forEach(function(node,k){var opacity=window.getComputedStyle(node).opacity;if(opacity!==undefined)b[k].style.opacity=opacity;});});
+  return clone;
+}
+function replaceWorldPanel(world,kind,pane){
+  var n=world.nodes[kind],clone=cameraClone(pane);clone.classList.add('attention-snapshot');clone.querySelectorAll('[data-c]').forEach(function(c){c.removeAttribute('data-c');});n.pane.remove();n.el.append(clone);n.pane=clone;
+}
+function featureInWorld(world,pane,rect,pose){
+  var wrap=h('div',{class:'camera-detail',style:'left:'+((rect.x-pose.x)/pose.s)+'px;top:'+((rect.y-pose.y)/pose.s)+'px;width:'+rect.w+'px;transform:scale('+(1/pose.s)+')'});
+  wrap.append(cameraClone(pane));world.el.append(wrap);return wrap;
+}
+function cameraMotion(el,frames,duration,id){if(frames.length===2&&!frames[0].easing)frames[0].easing='cubic-bezier(.4,0,.2,1)';return motion(el,frames,{duration:duration,fill:'forwards',id:'camera-'+id});}
+async function attentionTravel(old,el,from,to,task){
+  var view={w:vp.clientWidth,h:vp.clientHeight};
+  el.style.visibility='hidden';el.classList.remove('instant');
+  if(from.level==='outside'){
+    var entry=coverBlock(rel(old.querySelector('.attention-block'),vp),view);
+    old.style.transformOrigin='0 0';
+    cameraMotion(old,[{transform:cameraTransform({s:1,x:0,y:0})},{transform:cameraTransform(entry)}],850,'enter');
+    await task.wait(870);
+    // The interior stays hidden until the attention boundary has left the view.
+    el.style.visibility='';cameraMotion(el,[{opacity:0},{opacity:1}],180,'reveal');await task.wait(200);return;
+  }
+  if(to.level==='outside'){
+    var exitPose=coverBlock(rel(el.querySelector('.attention-block'),vp),view);
+    el.style.transformOrigin='0 0';el.style.transform=cameraTransform(exitPose);el.style.visibility='';
+    cameraMotion(el,[{opacity:0},{opacity:1}],180,'uncover');await task.wait(200);old.style.visibility='hidden';
+    cameraMotion(el,[{transform:cameraTransform(exitPose)},{transform:cameraTransform({s:1,x:0,y:0})}],850,'exit');await task.wait(870);el.style.transform='';return;
+  }
+  var oldPane=old.querySelector('.panel'),newPane=el.querySelector('.panel');
+  var a=rel(from.level==='overview'?old.querySelector('.attention-map'):oldPane,vp),b=rel(to.level==='overview'?el.querySelector('.attention-map'):newPane,vp);
+  var stage=h('div',{class:'camera-stage','aria-hidden':'true'});vp.append(stage);
+  var world=attentionWorld(stage,el.firstChild.getBoundingClientRect().width),start=worldPose(world,from,a,view),end=worldPose(world,to,b,view);
+  if(from.level==='projection')replaceWorldPanel(world,from.kind,oldPane);
+  if(to.level==='projection')replaceWorldPanel(world,to.kind,newPane);
+  var detailOut=from.level==='feature'?featureInWorld(world,oldPane,a,start):null,detailIn=to.level==='feature'?featureInWorld(world,newPane,b,end):null;
+  var route=cameraRoute(world,from,to,start,end,view),duration=route.duration;
+  world.el.style.transform=cameraTransform(start);worldOverview(world,from.level==='overview');
+  if(detailIn)detailIn.style.opacity='0';
+  old.style.visibility='hidden';
+  cameraMotion(world.el,route.frames,duration,'travel');
+  if(detailOut)cameraMotion(detailOut,[{opacity:1,offset:0},{opacity:0,offset:Math.min(.45,480/duration)},{opacity:0,offset:1}],duration,'detail-out');
+  if(detailIn)cameraMotion(detailIn,[{opacity:0,offset:0},{opacity:0,offset:.65},{opacity:1,offset:1}],duration,'detail-in');
+  Object.keys(world.nodes).forEach(function(kind){
+    var n=world.nodes[kind],wideFrom=from.level==='overview',wideTo=to.level==='overview';
+    if(wideFrom||wideTo){
+      cameraMotion(n.glyph,[{opacity:wideFrom?1:0,offset:0},{opacity:0,offset:wideFrom ? .3 : .65},{opacity:wideTo?1:0,offset:1}],duration,'landmark');
+    }
+    var inVector=to.level==='feature'&&to.kind===kind,outOfVector=from.level==='feature'&&from.kind===kind;
+    if(wideFrom||wideTo||inVector||outOfVector){
+      // Replace magnified vector labels with their detail surface before they
+      // can protrude around it; restore the projection as we pull back out.
+      cameraMotion(n.pane,[{opacity:wideFrom||outOfVector?0:1,offset:0},{opacity:1,offset:.3},{opacity:1,offset:.65},{opacity:wideTo||inVector?0:1,offset:1}],duration,'projection');
+    }
+  });
+  await task.wait(duration+20);el.style.visibility='';stage.remove();
+}
+
+async function go(n,mode){
+  var my=++gen,previous=idx;
+  if(run)run.cancel();
+  var task=run=createRun();busy=true;
+  Array.prototype.slice.call(vp.children).forEach(function(c){if(c!==cur)c.remove();});
+  if(cur){
+    cur.querySelectorAll('.ghost').forEach(function(g){g.remove();});
+    cur.querySelectorAll('[data-c]').forEach(function(c){c.style.visibility='';});
+    cur.classList.remove('slide');cur.style.transform='';cur.style.visibility='';cur.style.opacity='';cur.inert=true;cur.setAttribute('aria-hidden','true');
+  }
+  var old=cur,oldInner=old&&old.firstChild,oldTop=oldInner&&oldInner.getBoundingClientRect().top;
+  idx=n;ui();
+  // A taller caption recenters the viewport. Hold the outgoing picture at its
+  // previous screen position while the incoming scene uses its final geometry.
+  if(oldInner)oldInner.style.transform='translateY('+f(oldTop-oldInner.getBoundingClientRect().top)+'px)';
+  var el=h('div',{class:'station instant'}),inner=h('div',{class:'sin'});el.append(inner);vp.append(el);
+  var from=STEPS[previous].camera,to=STEPS[n].camera;
+  if(to&&(to.level==='projection'||to.level==='feature'))el.classList.add('attention-inside');
+  cur=el;
+  try{
+  var api=STEPS[n].build(inner);
+  var slide=(mode==='next'||mode==='back')&&old&&!RM;
+  var quick=(mode==='snap'||mode==='back'||RM);
+  if(quick){await api.play(makeCtx(my,true));if(my!==gen)return;}
+  if(slide&&STEPS[previous].ffview==='detail'&&STEPS[n].ffview==='overview'){
+    var source=old.querySelector('.ff-network'),target=el.querySelector('.ff-network'),a=rel(source,vp),b=rel(target,vp),copy=source.cloneNode(true);
+    copy.classList.add('ghost');copy.style.left=f(a.x)+'px';copy.style.top=f(a.y)+'px';copy.style.width=f(a.w)+'px';copy.style.height=f(a.h)+'px';vp.append(copy);
+    source.style.visibility='hidden';el.style.opacity='0';
+    motion(old,[{opacity:1},{opacity:0}],{duration:280,fill:'forwards'});
+    motion(copy,[{transform:'translate(0px,0px) scale(1)'},{transform:'translate('+f(b.x-a.x)+'px,'+f(b.y-a.y)+'px) scale('+(b.w/a.w)+')'}],{duration:1000,easing:'cubic-bezier(.65,0,.35,1)',fill:'forwards',id:'ff-pullback'});
+    await task.wait(1000);el.style.opacity='1';copy.remove();
+    motion(el,[{opacity:0},{opacity:1}],{duration:250});el.classList.remove('instant');
+  }else if(slide&&from&&to){
+    await attentionTravel(old,el,from,to,task);if(my!==gen)return;
+  }else if(slide){
+    var dir=mode==='next'?1:-1,carry=[];
+    old.querySelectorAll('[data-c]').forEach(function(o){
+      var nw=el.querySelector('[data-c="'+o.getAttribute('data-c')+'"]');if(!nw)return;
+      var a=rel(o,vp),b=rel(nw,vp),gh=o.cloneNode(true);
+      gh.classList.add('ghost');gh.style.left=f(a.x)+'px';gh.style.top=f(a.y)+'px';gh.style.width=f(a.w)+'px';vp.append(gh);
+      o.style.visibility='hidden';nw.style.visibility='hidden';carry.push([gh,nw]);
+      // The opening token rows are taller than the inline labels they become.
+      // Match their height and spacing too, so the text baseline does not jump
+      // when the moving copy hands over to the real label.
+      motion(gh,[{transform:'translate(0px,0px)',height:f(a.h)+'px',width:f(a.w)+'px',gap:window.getComputedStyle(o).gap},{transform:'translate('+f(b.x-a.x)+'px,'+f(b.y-a.y)+'px)',height:f(b.h)+'px',width:f(b.w)+'px',gap:window.getComputedStyle(nw).gap}],{duration:640,easing:'cubic-bezier(.65,0,.35,1)',fill:'forwards'});
+    });
+    el.style.transform='translateX('+(dir*100)+'%)';void el.offsetWidth;el.classList.remove('instant');
+    el.classList.add('slide');old.classList.add('slide');void el.offsetWidth;
+    el.style.transform='translateX(0)';old.style.transform='translateX('+(-dir*100)+'%)';
+    await task.wait(660);
+    carry.forEach(function(p){p[0].remove();p[1].style.visibility='';});
+    if(my!==gen)return;
+    el.classList.remove('slide');
+  }else{void el.offsetWidth;el.classList.remove('instant');}
+  if(old&&old.parentNode)old.remove();
+  if(!quick){await task.frame();await task.frame();if(my!==gen)return;await api.play(makeCtx(my,false));}
+  }catch(error){if(error!==CANCELLED)throw error;}
+  finally{if(my===gen)busy=false;}
+}
+function next(){
+  if(idx<STEPS.length-1)go(idx+1,'next');
+  else{CHOSEN=FULL;TEMP=1;go(0,'fresh');}
+}
+function back(){if(idx>0)go(idx-1,'back');}
+nextBtn.addEventListener('click',next);
+backBtn.addEventListener('click',back);
+replayBtn.addEventListener('click',function(){go(idx,'fresh');});
+document.addEventListener('keydown',function(e){
+  if(e.defaultPrevented||e.altKey||e.ctrlKey||e.metaKey||e.shiftKey)return;
+  if(e.target&&e.target.closest&&e.target.closest('input,textarea,select,button,[contenteditable="true"]'))return;
+  if(e.key==='ArrowRight'){e.preventDefault();next();}
+  else if(e.key==='ArrowLeft'){e.preventDefault();back();}
+});
+var tx=null,ty=null;
+vp.addEventListener('touchstart',function(e){if(e.target.closest('input,button')){tx=null;return;}tx=e.touches[0].clientX;ty=e.touches[0].clientY;},{passive:true});
+vp.addEventListener('touchend',function(e){if(tx===null)return;var dx=e.changedTouches[0].clientX-tx,dy=e.changedTouches[0].clientY-ty;tx=null;if(Math.abs(dx)>50&&Math.abs(dx)>Math.abs(dy)*1.3){if(dx<0)next();else back();}},{passive:true});
+vp.addEventListener('touchcancel',function(){tx=null;},{passive:true});
+var lastW=window.innerWidth,rt=null;
+window.addEventListener('resize',function(){clearTimeout(rt);rt=setTimeout(function(){if(Math.abs(window.innerWidth-lastW)>=1){lastW=window.innerWidth;go(idx,'snap');}},180);});
+
+go(0,'fresh');
+if(document.fonts&&document.fonts.status==='loading')document.fonts.ready.then(function(){if(idx>0)go(idx,'snap');});
+})();
+</script>
+
+</body>
+</html>

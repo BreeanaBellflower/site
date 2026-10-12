@@ -1156,18 +1156,6 @@ var predictionBridge={cap:'So far, we’ve described attention as understanding 
  wt(svg,200,402,'the stack prepares the information · the projection scores tokens');inner.append(svg);
  return {play:async function(c){for(var k=0;k<stages.length;k++){c.cls(stages[k],'lit');await c.wait(k<3?450:650);}}};
 }};
-var outputMatrix={cap:'After the last block, we use the final token’s vector—“was”—to predict what comes next. A learned output matrix turns its eight numbers into one score for every vocabulary token. Softmax converts those scores into probabilities that sum to 100%. The next step selects one token from that distribution.',build:function(inner){
- var p=panel('output · from a vector to vocabulary probabilities'),g=h('div',{class:'output-overview'}),P=softmax(LOG),top=ORDER.slice(0,3),rest=1-top.reduce(function(sum,k){return sum+P[k];},0);
- var input=h('div',{class:'output-vector'},h('span',{class:'tw',text:'was'}),bars(L2WAS,'acc'),h('span',{class:'lbl',text:'8 numbers'}));
- var projection=h('div',{class:'output-projection'},h('span',{text:'learned output matrix'}),h('small',{text:'8 numbers → 27 vocabulary scores'}));
- var table=h('div',{class:'output-table'}),fills=[];
- ['vocabulary','score','softmax → probability'].forEach(function(t){table.append(h('span',{class:'lbl',text:t}));});
- top.forEach(function(k){var fill=h('i',{class:'pb',style:'width:0%'});table.append(h('span',{text:VOCAB[k]}),h('span',{class:'output-score',text:LOG[k].toFixed(2)}),h('span',{class:'output-probability'},h('span',{class:'pt'},fill),h('span',{class:'pv',text:pct(P[k])})));fills.push([fill,P[k]]);});
- var other=h('i',{class:'pb',style:'width:0%'});table.append(h('span',{text:'24 more'}),h('span',{class:'output-score',text:'24 scores'}),h('span',{class:'output-probability'},h('span',{class:'pt'},other),h('span',{class:'pv',text:pct(rest)})));fills.push([other,rest]);
- var strip=h('div',{class:'output-vocabulary'});VOCAB.forEach(function(token,k){strip.append(h('i',{class:'vocab-prob','aria-label':token+': '+pct(P[k]),style:'height:'+Math.max(2,40*P[k]/Math.max.apply(null,P))+'px'}));});
- g.append(input,h('span',{class:'output-down',text:'↓'}),projection,h('span',{class:'output-down',text:'↓'}),table,strip,h('p',{class:'ff-foot',text:'all 27 vocabulary entries · total probability 100%'}));p.append(g);inner.append(p);
- return {play:async function(c){await c.wait(400);c.cls(projection,'on');await c.wait(800);c.cls(table,'on');fills.forEach(function(pair){pair[0].style.width=(pair[1]*100).toFixed(2)+'%';});c.cls(strip,'on');}};
-}};
 var selectedToken={cap:function(){return 'Sampling chooses one token from the probability distribution: “'+VOCAB[CHOSEN]+'”. A one-hot vector would mark just that vocabulary entry with 1 and all others with 0. In practice, we keep its token ID and use that ID to look up its embedding on the next pass.';},build:function(inner){
  var p=panel('probabilities → one selected token'),g=h('div',{class:'vocab-bars'}),prob=softmax(LOG,TEMP),picked=[];
  VOCAB.forEach(function(word,k){var b=h('i',{class:'prob-stick','data-token':String(k),style:'height:'+Math.max(1,100*prob[k]/Math.max.apply(null,prob))+'px'}),one=h('i',{class:'one-stick'+(k===CHOSEN?' selected':''),'data-token':String(k)});g.append(h('div',{class:'vocab-column',title:word},b,one));picked.push(one);});
@@ -1199,7 +1187,8 @@ var titleSlide={cap:'Follow one sentence through embeddings, attention, next-tok
  return {play:async function(c){await c.wait(120);c.cls(title,'on');}};
 }};
 var originalSteps=STEPS.slice();
-STEPS=[titleSlide].concat(originalSteps.slice(0,4),[matrixIntro],originalSteps.slice(4,12),[allProjections],originalSteps.slice(12,18),[headsAndDepth,deepLayers,predictionBridge,outputMatrix,originalSteps[19],selectedToken,generationLoop,cachePurpose,originalSteps[20],cacheMemory]);
+originalSteps[19].cap='After the last block, we use the final token’s vector—“was”—to predict what comes next. A learned output matrix turns its eight numbers into one score for every vocabulary token. Softmax converts those scores into probabilities that sum to 100%. The next step selects one token from that distribution.';
+STEPS=[titleSlide].concat(originalSteps.slice(0,4),[matrixIntro],originalSteps.slice(4,12),[allProjections],originalSteps.slice(12,18),[headsAndDepth,deepLayers,predictionBridge,originalSteps[19],selectedToken,generationLoop,cachePurpose,originalSteps[20],cacheMemory]);
 
 /* ---------- map, navigation ---------- */
 function ffNetwork(){
@@ -1215,7 +1204,7 @@ function ffNetwork(){
   svg.append(l1,l2,n0,n1,bd,n2);return svg;
 }
 
-var GROUPS=[{label:'embeddings',steps:[1,2,3,4,5]},{label:'Q · K · V',steps:[6,7,8,9,10,11,12]},{label:'attention',steps:[13,14,15,16,17,18]},{label:'layers',steps:[19,20,21,22,23]},{label:'prediction',steps:[24,25,26,27]},{label:'KV cache',steps:[28,29,30]}];
+var GROUPS=[{label:'embeddings',steps:[1,2,3,4,5]},{label:'Q · K · V',steps:[6,7,8,9,10,11,12]},{label:'attention',steps:[13,14,15,16,17,18]},{label:'layers',steps:[19,20,21,22,23]},{label:'prediction',steps:[24,25,26]},{label:'KV cache',steps:[27,28,29]}];
 var mapEl=document.getElementById('map'),vp=document.getElementById('vp'),capEl=document.getElementById('cap');
 var nextBtn=document.getElementById('next'),backBtn=document.getElementById('back'),replayBtn=document.getElementById('replay');
 var dots=[],grps=[];

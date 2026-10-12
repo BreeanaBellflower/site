@@ -19,7 +19,7 @@ any future server-side features will need a separate service.
 
 ## Walkthrough verification
 
-Run `node tests/animation-regression.mjs` to check all 31 scenes, animation cleanup, navigation, and illustrative arithmetic. This deterministic harness uses stubbed geometry; check layout in a browser after visual changes.
+Run `node tests/animation-regression.mjs` to check all 30 scenes, animation cleanup, navigation, and illustrative arithmetic. This deterministic harness uses stubbed geometry; check layout in a browser after visual changes.
 
 ## Domain migration
 

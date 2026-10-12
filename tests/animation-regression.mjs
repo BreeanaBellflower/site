@@ -49,7 +49,7 @@ state:function(){return {idx:idx,busy:busy,cur:cur,run:run,gen:gen};},choose:fun
 go(0,'fresh');\nif(document.fonts`);
 const context=vm.createContext({document,window,console,setTimeout:timeout,clearTimeout:clear,requestAnimationFrame:fn=>timeout(fn,16),cancelAnimationFrame:clear,Math,Set});
 vm.runInContext(script,context);const lab=context.lab;let checks=0;
-const COUNT=31,OUTPUT=25,CACHE=29,SCORE=15,BLENDING=16,CAUSAL=17,HEADS=18;
+const COUNT=30,OUTPUT=24,CACHE=28,SCORE=15,BLENDING=16,CAUSAL=17,HEADS=18;
 function finished(index){assert.equal(lab.state().idx,index);assert.equal(nodes.vp.children.length,1);assert.equal(nodes.vp.querySelectorAll('.ghost').length,0);assert.equal(lab.state().busy,false);assert.equal(lab.state().run.stops.size,0);assert.equal(lab.state().cur.inert,false);checks+=6;}
 await settle();finished(0);
 assert.ok(nodes.vp.querySelector('h1'));assert.equal(nodes.next.firstChild.textContent,'Begin');assert.ok(document.documentElement.classList.contains('intro-dark'));checks+=3;
@@ -80,7 +80,7 @@ assert.ok(/\.mk\{[^}]*transition:none/.test(html));checks+=2;
 spinStart=animationRecords.length;document.getElementById('draw').fire('click');document.getElementById('draw').fire('click');await advance(300);
 assert.equal(nodes.vp.querySelector('.out').textContent,'');await settle();assert.equal(animationRecords.slice(spinStart).filter(a=>a.options.id==='token-draw-spin').length,1);checks+=2;
 // Changing temperature or leaving the slide cancels any uncommitted selection.
-lab.choose(1);document.getElementById('draw').fire('click');await advance(250);lab.go(26,'next');await settle();
+lab.choose(1);document.getElementById('draw').fire('click');await advance(250);lab.go(25,'next');await settle();
 assert.equal(nodes.vp.querySelector('.one-stick.selected').getAttribute('data-token'),'1');checks++;
 lab.go(OUTPUT,'snap');await settle();document.getElementById('draw').fire('click');await advance(250);document.getElementById('temp').value='0';document.getElementById('temp').fire('input');await settle();
 assert.equal(document.getElementById('draw').disabled,false);assert.equal(nodes.vp.querySelector('.out').textContent,'');assert.equal(nodes.vp.querySelector('.mk').hidden,true);checks+=3;
@@ -229,14 +229,14 @@ assert.ok(!animationRecords.slice(recordStart).some(a=>a.options.id==='ff-pullba
 // Whole-prompt and wider-network views preserve shapes and the selected token.
 lab.go(5,'snap');await settle();assert.equal(nodes.vp.querySelectorAll('.matrix-input-row').length,10);checks++;
 lab.go(14,'snap');await settle();assert.equal(nodes.vp.querySelectorAll('.vg').length,30);checks++;
-for(const step of [22,27]){lab.go(step,'snap');await settle();assert.equal(nodes.vp.querySelectorAll('.pipeline-block').length,32);checks++;}
-lab.go(24,'snap');await settle();assert.equal(nodes.vp.querySelectorAll('.output-score').length,4);assert.equal(nodes.vp.querySelectorAll('.vocab-prob').length,27);checks+=2;
+for(const step of [22,26]){lab.go(step,'snap');await settle();assert.equal(nodes.vp.querySelectorAll('.pipeline-block').length,32);checks++;}
+lab.go(OUTPUT,'snap');await settle();assert.ok(document.getElementById('draw'));assert.equal(nodes.vp.querySelectorAll('.prow').length,7);assert.equal(lab.steps.filter(step=>typeof step.cap==='string'&&step.cap.startsWith('After the last block,')).length,1);checks+=3;
 for(const token of [14,1,26]){
- lab.choose(token);lab.go(26,'snap');await settle();assert.equal(nodes.vp.querySelectorAll('.prob-stick').length,27);assert.equal(nodes.vp.querySelectorAll('.one-stick').length,27);
+ lab.choose(token);lab.go(25,'snap');await settle();assert.equal(nodes.vp.querySelectorAll('.prob-stick').length,27);assert.equal(nodes.vp.querySelectorAll('.one-stick').length,27);
  const selected=nodes.vp.querySelectorAll('.one-stick.selected');assert.equal(selected.length,1);assert.equal(selected[0].getAttribute('data-token'),String(token));checks+=4;
 }
-lab.choose(1);lab.go(27,'snap');await settle();assert.equal(nodes.vp.querySelectorAll('.pipeline-block.lit').length,0);checks++;
-lab.choose(14);lab.go(28,'snap');await settle();const strips=nodes.vp.querySelectorAll('.work-strip');assert.equal(strips.length,8);
+lab.choose(1);lab.go(26,'snap');await settle();assert.equal(nodes.vp.querySelectorAll('.pipeline-block.lit').length,0);checks++;
+lab.choose(14);lab.go(27,'snap');await settle();const strips=nodes.vp.querySelectorAll('.work-strip');assert.equal(strips.length,8);
 for(let i=0;i<4;i++){assert.equal(strips[2*i].querySelectorAll('.compute').length,10+i);assert.equal(strips[2*i+1].querySelectorAll('.compute').length,i===0?10:1);checks+=2;}
-lab.go(30,'snap');await settle();assert.equal(nodes.vp.querySelectorAll('.cache-cell').length,4*2*13);checks+=2;
+lab.go(29,'snap');await settle();assert.equal(nodes.vp.querySelectorAll('.cache-cell').length,4*2*13);checks+=2;
 console.log(`PASS: ${checks} animation lifecycle and arithmetic assertions across ${COUNT} scenes. No browser/layout rendering performed.`);

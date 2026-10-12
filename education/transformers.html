@@ -840,7 +840,7 @@ featureLesson('value','Value space holds information worth passing onward. For �
    }};
  }},
 
-{cap:'Multiply each value by its share and add coordinate by coordinate, giving a four-number mixture for “it”. The learned output matrix computes eight different weighted sums of those four numbers. Each sum becomes one number in an eight-number update, matching the original token vector’s size. Add the update to that vector: “it” now carries information from its context.',
+{cap:'Multiply each value by its share and add coordinate by coordinate, giving a four-number mixture for “it”. The output matrix computes eight different weighted sums on those four numbers to become an update that matches the original token vector’s size. Add the update to that vector: “it” now carries information from its context.',
  build:function(inner){
    var p=panel('attention · updating “it”'),g=h('div',{class:'t5'}),left=h('div'),vs=[];
    for(var j=0;j<=IT;j++){

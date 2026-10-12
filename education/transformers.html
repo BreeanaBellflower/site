@@ -1139,7 +1139,7 @@ var headsAndDepth={cap:'More heads examine different relationships in parallel, 
  wt(svg,200,376,'illustrative pattern · layers have no assigned English roles');inner.append(svg);
  return {play:async function(c){await c.wait(300);c.cls(heads,'lit');await c.wait(1000);c.cls(first,'lit');await c.wait(1100);c.cls(later,'lit');}};
 }};
-var deepLayers={cap:'A language model repeats this transformer block many times—32 in this illustration. Each block has attention and a feed-forward network, with its own learned weights. All token vectors continue through the stack. Later attention can combine information that earlier blocks have already gathered and interpreted.',build:function(inner){
+var deepLayers={cap:'A language model repeats this transformer block many times—32 in this illustration. Each block has attention and a feed-forward network, with its own learned weights. All token vectors continue through the stack. Later attention blocks act on information that earlier blocks have already interpreted.',build:function(inner){
  var svg=wideSvg('32 transformer blocks, each containing attention and a feed-forward network',400);
  wt(svg,200,16,'attention + feed-forward in every block');var blocks=pipeline(svg,12,35,376);wt(svg,200,387,'10 token vectors in → 10 richer token vectors out');inner.append(svg);
  return {play:async function(c){for(var i=0;i<32;i++){c.cls(blocks[i],'lit');await c.wait(65);}}};

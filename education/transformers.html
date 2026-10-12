@@ -783,7 +783,7 @@ var STEPS=[
    }};
  }},
 
-matrixLesson('query','In an attention block, a query is a learned pattern describing which features would be useful to a token. The query matrix produces it from that token’s current representation. Comparing the query with the keys determines how much information to take from each token. Here, the query from “it” matches the key from “glass”.',WQ,IT,[IT,GLASS,WAS]),
+matrixLesson('query','In an attention block, a query is a learned pattern describing which features would be useful to a token. The query matrix produces it from that token’s current representation. Comparing the query with the keys determines how much information to take from each token.',WQ,IT,[IT,GLASS,WAS]),
 
 featureLesson('query','Query and key coordinates work together. For “it”, imagine a query favoring keys for a singular, non-human referent. Other queries might seek a verb’s subject or a repeated name. These are soft preferences: “water” could match too. Here, “it” and “glass” share a referent, not a grammatical role.',IT,['find a referent','prefer singular','prefer non-human'],['glass','or','water']),
 

@@ -1144,7 +1144,7 @@ var deepLayers={cap:'A language model repeats this transformer block many times�
  wt(svg,200,16,'attention + feed-forward in every block');var blocks=pipeline(svg,12,35,376);wt(svg,200,387,'10 token vectors in → 10 richer token vectors out');inner.append(svg);
  return {play:async function(c){for(var i=0;i<32;i++){c.cls(blocks[i],'lit');await c.wait(65);}}};
 }};
-var predictionBridge={cap:'So far, we’ve described attention as understanding what tokens refer to and how they relate. Further blocks build on that context to predict what comes next. Keys still offer features to match, queries seek relevant information, and values supply it—but that information increasingly supports a prediction. By the final block, a simple learned projection can score the possible next tokens.',build:function(inner){
+var predictionBridge={cap:'So far, we’ve described attention as understanding what tokens refer to and how they relate. But the more attention blocks we pass through, the more about relationships between tokens; that information increasingly supports the outcome of predicting the next. By the final block, an attention block is able to score the possible next tokens.',build:function(inner){
  var svg=wideSvg('Successive transformer blocks produce a prediction-useful final vector, followed by normalization, linear vocabulary scoring, softmax, and token selection.',410),stages=[];
  [['early','features'],['middle','interpretation'],['late','prediction']].forEach(function(parts,k){var x=67+k*133,g=sv('g',{class:'depth-stage'});wt(g,x,20,parts[0]);wr(g,x-56,32,112,40);wt(g,x,56,parts[1]);svg.append(g);stages.push(g);if(k<2)wl(svg,'M'+(x+57)+' 52 H'+(x+76));});
  wt(svg,200,94,'the same mechanisms · increasingly useful for prediction');

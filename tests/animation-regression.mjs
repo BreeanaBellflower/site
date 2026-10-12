@@ -56,6 +56,16 @@ assert.ok(nodes.vp.querySelector('h1'));assert.equal(nodes.next.firstChild.textC
 for(let i=1;i<COUNT;i++){lab.next();await settle();finished(i);}
 assert.ok(nodes.vp.querySelector('.cache-cell'));checks++;
 lab.next();await settle();finished(0);
+// The final slide blocks click, keyboard, and swipe restart paths for ten seconds.
+lab.go(COUNT-1,'snap');await advance(0);
+assert.equal(nodes.next.disabled,true);lab.next();assert.equal(lab.state().idx,COUNT-1);
+document.listeners.keydown({key:'ArrowRight',target:new Node('div'),preventDefault(){}});
+assert.equal(lab.state().idx,COUNT-1);checks+=3;
+await advance(9999);assert.equal(nodes.next.disabled,true);checks++;
+await advance(1);assert.equal(nodes.next.disabled,false);checks++;
+lab.next();await settle();finished(0);
+lab.go(COUNT-1,'snap');await advance(0);lab.back();await settle();
+assert.equal(nodes.next.disabled,false);assert.equal(lab.state().idx,COUNT-2);checks+=2;
 // Leave during typing, carries, and value blending; settle the last operation.
 for(let i=0;i<COUNT*5;i++){const step=i%COUNT;lab.go(step,i%3===0?'fresh':'next');await advance(i%2?37:190);}
 await settle();finished(COUNT-1);

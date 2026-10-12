@@ -9,17 +9,19 @@ Personal portfolio, hosted with GitHub Pages from `main` at the repository root.
 - `images/`, `fonts/`, `favicon.svg`, and `og.png`: public assets.
 - `404.html`: custom error page.
 
-This repository starts from the complete static Astro export of the existing
-portfolio. The original Astro component source was not present in the deployed
-folder. No build or dependency installation is needed; edit the HTML/CSS directly.
+This repository contains the complete static Astro export from the active server
+deployment, preserving its original green-and-orange design. The original Astro
+component source was not present in the deployed folder. No build or dependency
+installation is needed; edit the HTML/CSS directly.
 Pushes to `main` trigger GitHub Pages publication. GitHub Pages hosts static files;
 any future server-side features will need a separate service.
 
 ## Domain migration
 
-The intended custom domain is `breeanabellflower.com`. Its nameservers were
-Cloudflare when this repository was prepared, so DNS records should be changed
-there unless DNS management is deliberately moved to Namecheap first.
+The live custom domain is `breeanabellflower.com`, with HTTPS enforced. DNS is
+managed in Cloudflare; the apex and www already point to GitHub Pages. The
+website uses root-relative asset paths to preserve the active deployment exactly.
+The GitHub Pages project URL redirects to the custom domain.
 
 In Settings > Pages, add the custom domain before changing DNS. Replace conflicting
 website records with:
